@@ -1,42 +1,49 @@
+
 import mongoengine as me
 from datetime import datetime
 
-class User(me.Document):
-    """
-    User model cho MongoDB dùng mongoengine
-    """
-    # Thông tin cơ bản
-    email = me.StringField(required=True, unique=True)           # Email duy nhất
-    password_hash = me.StringField(required=True)                # Mật khẩu đã băm (bcrypt)
-    full_name = me.StringField()                                 # Họ tên đầy đủ
-    role = me.StringField(choices=["user", "admin"], default="user")                          # Vai trò: user, admin
-    # Thông tin bổ sung
-    phone = me.StringField()                                     # Số điện thoại
-    address = me.StringField()                                   # Địa chỉ
-    gender = me.StringField(choices=["male", "female", "other"]) # Giới tính
-    birthday = me.DateTimeField()                                # Ngày sinh
+class ProviderLink(me.EmbeddedDocument):
+    provider = me.StringField(required=True, choices=["google", "facebook"])
+    provider_user_id = me.StringField(required=True)  # Google: sub | Facebook: id
 
-    # Hệ thống
-    created_at = me.DateTimeField(default=datetime.utcnow)       # Ngày tạo tài khoản
+class User(me.Document):
+    # Cho phép None (một số tài khoản FB không có email); unique+sparse để không đụng nhau
+    email = me.StringField(required=False, unique=True, sparse=True)
+    password_hash = me.StringField(required=False)  # social login có thể không có mật khẩu
+    full_name = me.StringField()
+    role = me.StringField(choices=["user", "admin"], default="user")
+
+    # Danh sách liên kết social
+    providers = me.EmbeddedDocumentListField(ProviderLink, default=list)
+
+    # Thông tin bổ sung
+    phone = me.StringField()
+    address = me.StringField()
+    gender = me.StringField(choices=["male", "female", "other"])
+    birthday = me.DateTimeField()
+    created_at = me.DateTimeField(default=datetime.utcnow)
 
     meta = {
-        "collection": "users",   # tên collection trong MongoDB
-        "indexes": ["email"]     # index cho email để tìm nhanh
+        "collection": "users",
+        "indexes": [
+            "email",
+            {"fields": ["providers.provider", "providers.provider_user_id"]},
+        ]
     }
 
     def to_safe_dict(self):
-        """
-        Trả về thông tin user an toàn (không gồm password_hash).
-        Dùng khi trả response cho client.
-        """
         return {
             "id": str(self.id),
             "email": self.email,
             "full_name": self.full_name,
+            "role": self.role,
+            "providers": [
+                {"provider": p.provider, "provider_user_id": p.provider_user_id}
+                for p in self.providers
+            ],
             "phone": self.phone,
             "address": self.address,
             "gender": self.gender,
-            "role": self.role,
             "birthday": self.birthday.isoformat() if self.birthday else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

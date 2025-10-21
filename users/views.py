@@ -7,6 +7,18 @@ import os
 from .models import User
 from .auth import hash_password, check_password, create_jwt, require_auth, require_admin
 ADMIN_SIGNUP_KEY = os.getenv("ADMIN_SIGNUP_KEY", "")
+
+
+from rest_framework.views import APIView
+from .social import oauth_google, oauth_facebook
+
+class GoogleOAuthView(APIView):
+    def post(self, request):
+        return oauth_google(request)
+
+class FacebookOAuthView(APIView):
+    def post(self, request):
+        return oauth_facebook(request)
 # -------- Register --------
 class RegisterView(APIView):
     def post(self, request):
