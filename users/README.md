@@ -23,13 +23,14 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
 
 *   **Endpoint:** `POST /register`
 *   **Method:** `POST`
-*   **Mô tả:** Đăng ký một người dùng mới bằng email và mật khẩu.
+*   **Mô tả:** Đăng ký một người dùng mới bằng email và mật khẩu. Có thể cung cấp `admin_key` để tạo tài khoản quản trị viên.
 *   **Body (JSON):**
     ```json
     {
         "email": "user@example.com",
         "password": "yourstrongpassword",
-        "full_name": "Nguyen Van A"
+        "full_name": "Nguyen Van A",
+        "admin_key": "your_secret_admin_key" // (Optional)
     }
     ```
 *   **Success Response (201 Created):**
@@ -39,17 +40,23 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
         "email": "user@example.com",
         "full_name": "Nguyen Van A",
         "role": "user",
+        "providers": [],
         "phone": null,
         "address": null,
-        "providers": []
+        "gender": null,
+        "birthday": null,
+        "created_at": "2025-10-22T10:00:00.000Z"
     }
     ```
-*   **Error Response (400 Bad Request):**
-    ```json
-    {
-        "message": "Email already exists"
-    }
-    ```
+*   **Error Responses:**
+    *   `400 Bad Request`: Dữ liệu không hợp lệ (thiếu email/password, email sai định dạng, mật khẩu quá ngắn).
+        ```json
+        { "detail": "invalid email" }
+        ```
+    *   `409 Conflict`: Email đã được đăng ký.
+        ```json
+        { "detail": "Email already registered" }
+        ```
 
 ---
 
@@ -69,18 +76,13 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
     ```json
     {
         "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "user": {
-            "id": "60d5ecf3e7b1c3b4a8f1b1a0",
-            "email": "user@example.com",
-            "full_name": "Nguyen Van A",
-            "role": "user"
-        }
+        "token_type": "Bearer"
     }
     ```
 *   **Error Response (401 Unauthorized):**
     ```json
     {
-        "message": "Invalid credentials"
+        "detail": "Invalid credentials"
     }
     ```
 
@@ -90,29 +92,24 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
 
 *   **Endpoint:** `GET /me`
 *   **Method:** `GET`
-*   **Mô tả:** Lấy thông tin chi tiết của người dùng đang đăng nhập (dựa trên JWT).
+*   **Mô tả:** Lấy thông tin chi tiết của người dùng đang đăng nhập (dựa trên payload của JWT).
 *   **Headers:** `Authorization: Bearer <your_jwt_access_token>` (Bắt buộc)
 *   **Success Response (200 OK):**
     ```json
     {
-        "id": "60d5ecf3e7b1c3b4a8f1b1a0",
-        "email": "user@example.com",
-        "full_name": "Nguyen Van A",
-        "role": "user",
-        "phone": "0987654321",
-        "address": "123 Duong ABC, Quan 1, TP. HCM",
-        "providers": [
-            {
-                "provider": "google",
-                "provider_user_id": "109876543210987654321"
-            }
-        ]
+        "user": {
+            "sub": "60d5ecf3e7b1c3b4a8f1b1a0",
+            "email": "user@example.com",
+            "role": "user",
+            "iat": 1678886400,
+            "exp": 1678890000
+        }
     }
     ```
 *   **Error Response (401 Unauthorized):**
     ```json
     {
-        "message": "Authorization header is missing"
+        "detail": "Missing Bearer token"
     }
     ```
 
@@ -122,29 +119,24 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
 
 *   **Endpoint:** `POST /oauth/google`
 *   **Method:** `POST`
-*   **Mô tả:** Đăng nhập hoặc đăng ký thông qua tài khoản Google. Backend sẽ nhận `auth_token` từ frontend, xác thực với Google và trả về JWT của hệ thống.
+*   **Mô tả:** Đăng nhập hoặc đăng ký thông qua tài khoản Google. Backend sẽ nhận `id_token` từ frontend, xác thực với Google và trả về JWT của hệ thống.
 *   **Body (JSON):**
     ```json
     {
-        "auth_token": "google_authorization_code_or_id_token_from_frontend"
+        "id_token": "google_id_token_from_frontend"
     }
     ```
 *   **Success Response (200 OK):** (Tương tự như đăng nhập cơ bản)
     ```json
     {
         "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "user": {
-            "id": "60d5ecf3e7b1c3b4a8f1b1a1",
-            "email": "google.user@gmail.com",
-            "full_name": "Google User",
-            "role": "user"
-        }
+        "token_type": "Bearer"
     }
     ```
-*   **Error Response (400 Bad Request):**
+*   **Error Response (401 Unauthorized):**
     ```json
     {
-        "message": "Invalid Google token"
+        "detail": "Invalid Google token"
     }
     ```
 ---
@@ -164,18 +156,13 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
     ```json
     {
         "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "user": {
-            "id": "60d5ecf3e7b1c3b4a8f1b1a2",
-            "email": "facebook.user@example.com",
-            "full_name": "Facebook User",
-            "role": "user"
-        }
+        "token_type": "Bearer"
     }
     ```
-*   **Error Response (400 Bad Request):**
+*   **Error Response (401 Unauthorized):**
     ```json
     {
-        "message": "Invalid Facebook token"
+        "detail": "Invalid Facebook token"
     }
     ```
 
