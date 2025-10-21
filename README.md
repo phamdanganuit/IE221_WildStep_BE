@@ -1,11 +1,3 @@
-Rất tiếc, tôi không thể trực tiếp tạo và xuất ra một file `.docx` (Microsoft Word). Chức năng của tôi là tạo ra nội dung dưới dạng văn bản.
-
-Tuy nhiên, tôi có thể cung cấp cho bạn toàn bộ nội dung đã được định dạng sẵn. Bạn chỉ cần thực hiện 2 bước đơn giản:
-
-1.  Nhấn nút **"Sao chép"** ở góc trên bên phải của khung nội dung bên dưới.
-2.  Mở Microsoft Word, tạo một tài liệu mới và **dán (Paste)** vào.
-
-Word sẽ tự động nhận diện các tiêu đề, danh sách và định dạng cơ bản, giúp bạn có ngay một tài liệu hoàn chỉnh.
 
 ---
 
