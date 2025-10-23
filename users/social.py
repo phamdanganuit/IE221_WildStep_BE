@@ -53,7 +53,7 @@ def oauth_google(request):
     if not user:
         user = User(
             email=email or None,
-            full_name=name,
+            displayName=name,
             providers=[ProviderLink(provider="google", provider_user_id=sub)]
         ).save()
 
@@ -111,7 +111,7 @@ def oauth_facebook(request):
     if not user:
         user = User(
             email=email or None,
-            full_name=name,
+            displayName=name,
             providers=[ProviderLink(provider="facebook", provider_user_id=fb_id)]
         ).save()
 
