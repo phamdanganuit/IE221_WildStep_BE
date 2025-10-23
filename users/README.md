@@ -4,7 +4,7 @@
 
 ### **API Documentation - Shoe Shop**
 
-**Base URL:** `/api`
+**Base URL:** https://api.shoe-shop.app/api
 
 #### **Authentication (Xác thực)**
 
