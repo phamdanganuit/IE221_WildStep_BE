@@ -4,7 +4,7 @@
 
 ### **API Documentation - Shoe Shop**
 
-**Base URL:** `http://127.0.0.1:8000/api`
+**Base URL:** `/api`
 
 #### **Authentication (Xác thực)**
 
@@ -23,14 +23,14 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
 
 *   **Endpoint:** `POST /register`
 *   **Method:** `POST`
-*   **Mô tả:** Đăng ký một người dùng mới bằng email và mật khẩu. Có thể cung cấp `admin_key` để tạo tài khoản quản trị viên.
+*   **Mô tả:** Đăng ký một người dùng mới bằng email và mật khẩu.
 *   **Body (JSON):**
     ```json
     {
         "email": "user@example.com",
         "password": "yourstrongpassword",
-        "full_name": "Nguyen Van A",
-        "admin_key": "your_secret_admin_key" // (Optional)
+        "displayName": "Nguyen Van A",
+        "admin_key": "your_secret_admin_key" // (Tùy chọn, chỉ dành cho quản trị viên)
     }
     ```
 *   **Success Response (201 Created):**
@@ -38,25 +38,13 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
     {
         "id": "60d5ecf3e7b1c3b4a8f1b1a0",
         "email": "user@example.com",
-        "full_name": "Nguyen Van A",
-        "role": "user",
-        "providers": [],
-        "phone": null,
-        "address": null,
-        "gender": null,
-        "birthday": null,
-        "created_at": "2025-10-22T10:00:00.000Z"
+        "displayName": "Nguyen Van A",
+        "role": "user"
     }
     ```
 *   **Error Responses:**
     *   `400 Bad Request`: Dữ liệu không hợp lệ (thiếu email/password, email sai định dạng, mật khẩu quá ngắn).
-        ```json
-        { "detail": "invalid email" }
-        ```
     *   `409 Conflict`: Email đã được đăng ký.
-        ```json
-        { "detail": "Email already registered" }
-        ```
 
 ---
 
@@ -81,41 +69,74 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
     ```
 *   **Error Response (401 Unauthorized):**
     ```json
-    {
-        "detail": "Invalid credentials"
-    }
+    { "detail": "Invalid credentials" }
     ```
 
 ---
 
-#### **1.3. Lấy thông tin người dùng hiện tại**
+#### **1.3. Lấy thông tin hồ sơ người dùng chi tiết**
+
+*   **Endpoint:** `GET /profile`
+*   **Method:** `GET`
+*   **Mô tả:** Lấy thông tin chi tiết của người dùng đang đăng nhập từ cơ sở dữ liệu, bao gồm thông tin cá nhân, các liên kết và các số liệu thống kê.
+*   **Headers:** `Authorization: Bearer <your_jwt_access_token>` (Bắt buộc)
+*   **Success Response (200 OK):**
+    ```json
+    {
+        "_id": "60d5ecf3e7b1c3b4a8f1b1a0",
+        "username": "nguyenvana",
+        "displayName": "Nguyen Van A",
+        "email": "user@example.com",
+        "phone": "0987654321",
+        "sex": "male",
+        "birth": "2000-01-15T00:00:00",
+        "avatar": "https://example.com/avatar.jpg",
+        "role": "user",
+        "google": true, // true nếu đã liên kết tài khoản Google
+        "facebook": false, // true nếu đã liên kết tài khoản Facebook
+        "addresses": [ // Danh sách ID các địa chỉ của người dùng
+            "60d5ed12e7b1c3b4a8f1b1a1",
+            "60d5ed1fe7b1c3b4a8f1b1a2"
+        ],
+        "vouchers": [], // Danh sách ID các voucher của người dùng
+        "createdAt": "2025-10-22T10:00:00.000Z",
+        "cartCount": 5, // Số lượng sản phẩm trong giỏ hàng
+        "wishlistCount": 2, // Số lượng sản phẩm trong danh sách yêu thích
+        "notificationCount": 3 // Số lượng thông báo chưa đọc
+    }
+    ```
+*   **Error Response (401 Unauthorized / 404 Not Found):**
+    *   `401`: Token không hợp lệ hoặc bị thiếu.
+    *   `404`: Không tìm thấy người dùng tương ứng với token.
+
+---
+
+#### **1.4. Lấy thông tin payload của Token**
 
 *   **Endpoint:** `GET /me`
 *   **Method:** `GET`
-*   **Mô tả:** Lấy thông tin chi tiết của người dùng đang đăng nhập (dựa trên payload của JWT).
+*   **Mô tả:** Lấy thông tin thô được chứa trong payload của JWT. Hữu ích để kiểm tra nhanh token có hợp lệ không và chứa những thông tin gì (id, email, role).
 *   **Headers:** `Authorization: Bearer <your_jwt_access_token>` (Bắt buộc)
 *   **Success Response (200 OK):**
     ```json
     {
         "user": {
-            "sub": "60d5ecf3e7b1c3b4a8f1b1a0",
+            "sub": "60d5ecf3e7b1c3b4a8f1b1a0", // User ID
             "email": "user@example.com",
             "role": "user",
-            "iat": 1678886400,
-            "exp": 1678890000
+            "iat": 1678886400, // Issued At
+            "exp": 1678890000  // Expiration Time
         }
     }
     ```
 *   **Error Response (401 Unauthorized):**
     ```json
-    {
-        "detail": "Missing Bearer token"
-    }
+    { "detail": "Missing Bearer token" }
     ```
 
 ---
 
-#### **1.4. Đăng nhập bằng Google**
+#### **1.5. Đăng nhập bằng Google**
 
 *   **Endpoint:** `POST /oauth/google`
 *   **Method:** `POST`
@@ -135,13 +156,11 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
     ```
 *   **Error Response (401 Unauthorized):**
     ```json
-    {
-        "detail": "Invalid Google token"
-    }
+    { "detail": "Invalid Google token" }
     ```
 ---
 
-#### **1.5. Đăng nhập bằng Facebook**
+#### **1.6. Đăng nhập bằng Facebook**
 
 *   **Endpoint:** `POST /oauth/facebook`
 *   **Method:** `POST`
@@ -161,9 +180,7 @@ Token này được lấy từ kết quả trả về của các API đăng nh�
     ```
 *   **Error Response (401 Unauthorized):**
     ```json
-    {
-        "detail": "Invalid Facebook token"
-    }
+    { "detail": "Invalid Facebook token" }
     ```
 
 ---
