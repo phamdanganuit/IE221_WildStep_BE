@@ -49,7 +49,6 @@ MONGODB_DB = os.getenv("MONGODB_DB", "test") # Đọc thêm biến MONGODB_DB
 # ...
 
 # Thêm tham số `db` vào hàm connect
-mongoengine.connect(host=MONGODB_URI, db=MONGODB_DB)
 # MongoDB (dùng full URI trong .env)
 if not (MONGODB_URI.startswith("mongodb://") or MONGODB_URI.startswith("mongodb+srv://")):
     raise RuntimeError("MONGODB_URI must start with mongodb:// or mongodb+srv://")
