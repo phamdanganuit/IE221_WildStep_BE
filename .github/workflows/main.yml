@@ -1,0 +1,46 @@
+name: Build and Deploy to Azure App Service
+
+on:
+  push:
+    branches:
+      - main # Hoặc master, tùy vào nhánh chính của bạn
+  workflow_dispatch:
+
+env:
+  # SỬA 3 GIÁ TRỊ DƯỚI ĐÂY
+  AZURE_WEBAPP_NAME: ShoeShopAppJW    # <-- Tên App Service của bạn
+  ACR_NAME: shoeshop                # <-- Tên Azure Container Registry của bạn
+  IMAGE_NAME: shoe-shop-image       # <-- Tên image bạn muốn đặt (có thể giữ nguyên)
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Bước 1: Lấy code từ repo về
+      - name: 'Checkout GitHub Action'
+        uses: actions/checkout@v3
+
+      # Bước 2: Đăng nhập vào Azure bằng secret đã lưu
+      - name: 'Login to Azure'
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Bước 3: Đăng nhập vào Azure Container Registry
+      - name: 'Login to Azure Container Registry'
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+
+      # Bước 4: Build Docker image và Push lên ACR
+      # Image sẽ được đặt tên theo cú pháp: <tên_ACR>.azurecr.io/<tên_image>:<mã_commit>
+      - name: 'Build and push Docker image'
+        run: |
+          docker build . -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # Bước 5: Ra lệnh cho App Service tải và chạy image mới nhất
+      - name: 'Deploy to Azure Web App'
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          images: '${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}'
