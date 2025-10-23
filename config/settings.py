@@ -8,12 +8,7 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev")
 DEBUG = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = [
-    'shoeshopappjw.azurewebsites.net',
-    '127.0.0.1',
-    'localhost',
-    'shoeshopappjw-e8ahezc2fpfhdxag.japanwest-01.azurewebsites.net',
-]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()]
 
 INSTALLED_APPS = [
     "django.contrib.admin","django.contrib.auth","django.contrib.contenttypes",
