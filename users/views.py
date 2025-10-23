@@ -4,7 +4,7 @@ from rest_framework import status
 from email_validator import validate_email, EmailNotValidError
 from mongoengine.errors import NotUniqueError
 import os
-from .models import User
+from .models import User , Address
 from .auth import hash_password, check_password, create_jwt, require_auth, require_admin
 
 
@@ -31,8 +31,12 @@ class RegisterView(APIView):
     def post(self, request):
         email = (request.data.get("email") or "").strip().lower()
         password = request.data.get("password") or ""
-        full_name = request.data.get("full_name") or ""
-        admin_key= request.data.get("admin_key")
+        
+        # --- SỬA Ở ĐÂY ---
+        # Lấy 'displayName' từ request thay vì 'full_name'
+        display_name = request.data.get("displayName") or ""
+        
+        admin_key = request.data.get("admin_key")
         if not email or not password:
             return Response({"detail": "email and password are required"}, status=400)
 
@@ -46,15 +50,30 @@ class RegisterView(APIView):
 
         if User.objects(email=email).first():
             return Response({"detail": "Email already registered"}, status=409)
+        
         role="user"
         if admin_key and ADMIN_SIGNUP_KEY and admin_key==ADMIN_SIGNUP_KEY:
             role="admin"
+        
         try:
-            user = User(email=email, password_hash=hash_password(password), full_name=full_name, role=role).save()
+            # --- VÀ SỬA Ở ĐÂY ---
+            # Tạo User với trường `displayName`
+            user = User(
+                email=email, 
+                password_hash=hash_password(password), 
+                displayName=display_name, # <-- Sửa từ full_name
+                role=role
+            ).save()
         except NotUniqueError:
             return Response({"detail": "Email already registered"}, status=409)
 
-        return Response(user.to_safe_dict(), status=201)
+        # Hàm to_safe_dict không còn, trả về thông tin cơ bản
+        return Response({
+            "id": str(user.id),
+            "email": user.email,
+            "displayName": user.displayName,
+            "role": user.role
+        }, status=201)
 
 # -------- Login --------
 class LoginView(APIView):
@@ -117,6 +136,8 @@ class ProfileView(APIView):
             "sex": user.sex,
             "birth": user.birth.isoformat() if user.birth else None,
             "avatar": user.avatar,
+            "role": user.role,
+
             # Kiểm tra sự tồn tại của provider trong danh sách
             "google": any(p.provider == 'google' for p in user.providers),
             "facebook": any(p.provider == 'facebook' for p in user.providers),
@@ -124,7 +145,6 @@ class ProfileView(APIView):
             "addresses": [str(addr.id) for addr in Address.objects(user=user)],
             "vouchers": [str(v_id) for v_id in user.vouchers],
             "createdAt": user.created_at.isoformat(),
-            
             # --- Dữ liệu đếm được ---
             "cartCount": cart_count,
             "wishlistCount": wishlist_count,

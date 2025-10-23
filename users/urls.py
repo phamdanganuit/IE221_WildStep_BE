@@ -2,7 +2,7 @@
 
 from django.urls import path
 # Giả sử các view của bạn nằm trong users/views.py
-from .views import FacebookOAuthView, GoogleOAuthView, RegisterView, LoginView, MeView 
+from .views import FacebookOAuthView, GoogleOAuthView, RegisterView, LoginView, MeView, ProfileView  
 
 urlpatterns = [
     
@@ -11,7 +11,5 @@ urlpatterns = [
     path("me",       MeView.as_view(), name="me"),
     path("oauth/google",   GoogleOAuthView.as_view(), name="oauth_google"),
     path("oauth/facebook", FacebookOAuthView.as_view(), name="oauth_facebook"),
-
-
-    
+    path("profile", ProfileView.as_view(), name="profile"),
 ]
