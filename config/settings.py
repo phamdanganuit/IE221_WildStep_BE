@@ -44,13 +44,17 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
-
-# MongoDB (dùng full URI trong .env)
 MONGODB_URI = os.getenv("MONGODB_URI", "")
+MONGODB_DB = os.getenv("MONGODB_DB", "test") # Đọc thêm biến MONGODB_DB
+# ...
+
+# Thêm tham số `db` vào hàm connect
+mongoengine.connect(host=MONGODB_URI, db=MONGODB_DB)
+# MongoDB (dùng full URI trong .env)
 if not (MONGODB_URI.startswith("mongodb://") or MONGODB_URI.startswith("mongodb+srv://")):
     raise RuntimeError("MONGODB_URI must start with mongodb:// or mongodb+srv://")
 
-mongoengine.connect(host=MONGODB_URI)
+mongoengine.connect(host=MONGODB_URI, db=MONGODB_DB)
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Ho_Chi_Minh"
