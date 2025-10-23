@@ -12,6 +12,7 @@ ALLOWED_HOSTS = [
     'shoeshopappjw.azurewebsites.net',
     '127.0.0.1',
     'localhost',
+    'shoeshopappjw-e8ahezc2fpfhdxag.japanwest-01.azurewebsites.net',
 ]
 
 INSTALLED_APPS = [
