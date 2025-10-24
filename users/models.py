@@ -5,7 +5,7 @@ from datetime import datetime
 
 # ĐỊNH NGHĨA CÁC CLASS KHÔNG PHỤ THUỘC TRƯỚC
 class ProviderLink(me.EmbeddedDocument):
-    provider = me.StringField(required=True, choices=["google", "facebook"])
+    provider = me.StringField(required=True, choices=["google", "facebook", "line"])
     provider_user_id = me.StringField(required=True)
 
 

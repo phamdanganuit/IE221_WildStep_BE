@@ -8,45 +8,48 @@ from .models import User, ProviderLink
 from .auth import create_jwt
 
 # --------- GOOGLE ----------
-from google.oauth2 import id_token
-from google.auth.transport import requests as grequests
-
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 def oauth_google(request):
     """
-    Body FE: { "id_token": "<GOOGLE_ID_TOKEN>" }
+    Body FE: { "access_token": "<GOOGLE_ACCESS_TOKEN>" }
     """
-    idt = request.data.get("id_token")
-    if not idt:
-        return Response({"detail": "id_token is required"}, status=status.HTTP_400_BAD_REQUEST)
+    access_token = request.data.get("access_token")
+    if not access_token:
+        return Response({"detail": "access_token is required"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Lấy claims rồi tự so khớp aud để debug dễ
-        claims = id_token.verify_oauth2_token(idt, grequests.Request())
-        aud = claims.get("aud")
-        if aud != GOOGLE_CLIENT_ID:
-            return Response({
-                "detail": "Invalid Google token",
-                "why": "aud_mismatch",
-                "aud_from_token": aud,
-                "expected_google_client_id": GOOGLE_CLIENT_ID
-            }, status=status.HTTP_401_UNAUTHORIZED)
-
-        sub = claims["sub"]  # id duy nhất bên Google
-        email = (claims.get("email") or "").strip().lower()
-        name = claims.get("name") or ""
-    except Exception:
-        return Response({"detail": "Invalid Google token"}, status=status.HTTP_401_UNAUTHORIZED)
+        # Verify access_token bằng cách gọi Google API
+        userinfo_response = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            params={"access_token": access_token},
+            timeout=10
+        )
+        
+        if userinfo_response.status_code != 200:
+            return Response({"detail": "Invalid Google access token"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        user_data = userinfo_response.json()
+        
+        # Lấy thông tin từ Google API response
+        google_id = user_data.get("id")
+        email = (user_data.get("email") or "").strip().lower()
+        name = user_data.get("name") or ""
+        
+        if not google_id:
+            return Response({"detail": "Cannot fetch Google user ID"}, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        return Response({"detail": "Invalid Google access token"}, status=status.HTTP_401_UNAUTHORIZED)
 
     # Tìm theo provider trước
-    user = User.objects(providers__match={"provider": "google", "provider_user_id": sub}).first()
+    user = User.objects(providers__match={"provider": "google", "provider_user_id": google_id}).first()
 
     # Nếu chưa có, link theo email (tránh tạo user trùng)
     if not user and email:
         user = User.objects(email=email).first()
         if user:
-            user.providers.append(ProviderLink(provider="google", provider_user_id=sub))
+            user.providers.append(ProviderLink(provider="google", provider_user_id=google_id))
             user.save()
 
     # Nếu vẫn chưa có → tạo mới
@@ -54,7 +57,7 @@ def oauth_google(request):
         user = User(
             email=email or None,
             displayName=name,
-            providers=[ProviderLink(provider="google", provider_user_id=sub)]
+            providers=[ProviderLink(provider="google", provider_user_id=google_id)]
         ).save()
 
     token = create_jwt({"sub": str(user.id), "email": user.email, "role": user.role})
