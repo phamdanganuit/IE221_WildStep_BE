@@ -14,7 +14,7 @@ INSTALLED_APPS = [
     "django.contrib.admin","django.contrib.auth","django.contrib.contenttypes",
     "django.contrib.sessions","django.contrib.messages","django.contrib.staticfiles",
     "rest_framework","corsheaders",'users.apps.UsersConfig','orders.apps.OrdersConfig','notifications.apps.NotificationsConfig',
-    "storages",  # For Azure Blob Storage
+    "storages",
 ]
 
 MIDDLEWARE = [
@@ -49,11 +49,8 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
 MONGODB_URI = os.getenv("MONGODB_URI", "")
-MONGODB_DB = os.getenv("MONGODB_DB", "test") # Đọc thêm biến MONGODB_DB
-# ...
+MONGODB_DB = os.getenv("MONGODB_DB", "test")
 
-# Thêm tham số `db` vào hàm connect
-# MongoDB (dùng full URI trong .env)
 if not (MONGODB_URI.startswith("mongodb://") or MONGODB_URI.startswith("mongodb+srv://")):
     raise RuntimeError("MONGODB_URI must start with mongodb:// or mongodb+srv://")
 
@@ -66,32 +63,21 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# Media files (uploads)
-# Sử dụng Azure Blob Storage nếu có connection string, ngược lại dùng local
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
 AZURE_STORAGE_ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
 AZURE_STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER", "media")
 
 if AZURE_STORAGE_CONNECTION_STRING and AZURE_STORAGE_ACCOUNT_NAME:
-    # Sử dụng Azure Blob Storage
     DEFAULT_FILE_STORAGE = "storages.backends.azure_storage.AzureStorage"
     AZURE_CONTAINER = AZURE_STORAGE_CONTAINER
     AZURE_CONNECTION_STRING = AZURE_STORAGE_CONNECTION_STRING
     MEDIA_URL = os.getenv("MEDIA_URL", f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{AZURE_STORAGE_CONTAINER}/")
-    # MEDIA_ROOT vẫn cần có giá trị (django-storages có thể cần)
-    MEDIA_ROOT = BASE_DIR / "media"  # Vẫn tạo thư mục nhưng không dùng
-    
-    # Debug: Print để kiểm tra (remove sau khi debug xong)
-    print(f"[DEBUG] Azure Storage configured: account={AZURE_STORAGE_ACCOUNT_NAME}, container={AZURE_STORAGE_CONTAINER}")
+    MEDIA_ROOT = BASE_DIR / "media"
 else:
-    # Fallback về local storage (development)
     DEFAULT_FILE_STORAGE = "django.core.files.storage.FileSystemStorage"
     MEDIA_URL = "/media/"
     MEDIA_ROOT = BASE_DIR / "media"
     MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
-    
-    # Debug: Print để kiểm tra
-    print(f"[DEBUG] Using local storage. Connection string present: {bool(AZURE_STORAGE_CONNECTION_STRING)}, Account name present: {bool(AZURE_STORAGE_ACCOUNT_NAME)}")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

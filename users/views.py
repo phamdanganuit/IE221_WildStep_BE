@@ -34,12 +34,9 @@ class RegisterView(APIView):
     def post(self, request):
         email = (request.data.get("email") or "").strip().lower()
         password = request.data.get("password") or ""
-        
-        # --- SỬA Ở ĐÂY ---
-        # Lấy 'displayName' từ request thay vì 'full_name'
         display_name = request.data.get("displayName") or ""
-        
         admin_key = request.data.get("admin_key")
+        
         if not email or not password:
             return Response({"detail": "email and password are required"}, status=400)
 
@@ -59,18 +56,15 @@ class RegisterView(APIView):
             role="admin"
         
         try:
-            # --- VÀ SỬA Ở ĐÂY ---
-            # Tạo User với trường `displayName`
             user = User(
                 email=email, 
                 password_hash=hash_password(password), 
-                displayName=display_name, # <-- Sửa từ full_name
+                displayName=display_name,
                 role=role
             ).save()
         except NotUniqueError:
             return Response({"detail": "Email already registered"}, status=409)
 
-        # Hàm to_safe_dict không còn, trả về thông tin cơ bản
         return Response({
             "id": str(user.id),
             "email": user.email,
@@ -94,7 +88,6 @@ class LoginView(APIView):
 # -------- Me --------
 class MeView(APIView):
     @require_auth
-    # @require_admin
     def get(self, request):
         return Response({"user": request.user_claims}, status=200)
 
@@ -121,31 +114,23 @@ class ProfileView(APIView):
     @require_auth
     def get(self, request):
         try:
-            # Lấy user_id từ payload của token (đã được decorator @require_auth giải mã)
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # --- Bắt đầu các truy vấn phụ ---
-
-        # Truy vấn 1: Đếm số lượng sản phẩm trong giỏ hàng
         cart = Cart.objects.filter(user=user).first()
         cart_count = len(cart.products) if cart else 0
 
-        # Truy vấn 2: Đếm số lượng sản phẩm trong wishlist
         wishlist = Wishlist.objects.filter(user=user).first()
         wishlist_count = len(wishlist.product_ids) if wishlist else 0
 
-        # Truy vấn 3: Đếm số thông báo chưa đọc
         notification_doc = Notification.objects.filter(user=user).first()
         if notification_doc:
-            # Dùng generator expression để đếm cho hiệu quả
             unread_notification_count = sum(1 for notif in notification_doc.notifications if not notif.read)
         else:
             unread_notification_count = 0
         
-        # --- Xây dựng đối tượng JSON để trả về ---
         response_data = {
             "_id": str(user.id),
             "username": user.username,
@@ -156,15 +141,11 @@ class ProfileView(APIView):
             "birth": user.birth.isoformat() if user.birth else None,
             "avatar": user.avatar,
             "role": user.role,
-
-            # Kiểm tra sự tồn tại của provider trong danh sách
             "google": any(p.provider == 'google' for p in user.providers),
             "facebook": any(p.provider == 'facebook' for p in user.providers),
-            # Lấy danh sách địa chỉ của user bằng cách query ngược
             "addresses": [str(addr.id) for addr in Address.objects(user=user)],
             "vouchers": [str(v_id) for v_id in user.vouchers],
             "createdAt": user.created_at.isoformat(),
-            # --- Dữ liệu đếm được ---
             "cartCount": cart_count,
             "wishlistCount": wishlist_count,
             "notificationCount": unread_notification_count
@@ -222,7 +203,6 @@ class UpdateProfileView(APIView):
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Cập nhật các trường tùy chọn
         if 'displayName' in request.data:
             user.displayName = request.data['displayName']
         
@@ -240,7 +220,6 @@ class UpdateProfileView(APIView):
             birth_str = request.data['birth']
             if birth_str:
                 try:
-                    # Parse ISO format datetime
                     user.birth = datetime.fromisoformat(birth_str.replace('Z', '+00:00'))
                 except (ValueError, AttributeError):
                     return Response({"detail": "Invalid birth date format. Use ISO 8601 format"}, 
@@ -250,7 +229,6 @@ class UpdateProfileView(APIView):
 
         user.save()
 
-        # Trả về thông tin đã cập nhật
         return Response({
             "id": str(user.id),
             "email": user.email,
@@ -278,26 +256,21 @@ class UpdateAvatarView(APIView):
         if not file_obj:
             return Response({"detail": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Kiểm tra định dạng file
         allowed_types = ['image/jpeg', 'image/jpg', 'image/png']
         if file_obj.content_type not in allowed_types:
             return Response({"detail": "Invalid file type. Only JPEG and PNG are allowed"}, 
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Kiểm tra kích thước file (≤ 1MB)
-        if file_obj.size > 1 * 1024 * 1024:  # 1MB
+        if file_obj.size > 1 * 1024 * 1024:
             return Response({"detail": "File too large. Maximum size is 1MB"}, 
                           status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
-        # Xóa ảnh cũ nếu có
         if user.avatar:
             try:
-                # Lấy path tương đối từ URL (bỏ MEDIA_URL prefix nếu có)
                 old_path = user.avatar
                 if old_path.startswith('/media/'):
                     old_path = old_path.replace('/media/', '')
                 elif old_path.startswith('https://'):
-                    # URL từ Azure Blob, cần extract path từ URL
                     from urllib.parse import urlparse
                     from django.conf import settings
                     parsed = urlparse(old_path)
@@ -307,47 +280,55 @@ class UpdateAvatarView(APIView):
                 if default_storage.exists(old_path):
                     default_storage.delete(old_path)
             except Exception:
-                pass  # Bỏ qua nếu không xóa được
+                pass
 
-        # Tạo tên file unique
         import uuid
         ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'jpg'
         filename = f"avatars/avatar_{user_id}_{uuid.uuid4().hex[:8]}.{ext}"
         
-        # Lưu file vào storage (Azure Blob hoặc local tùy cấu hình)
         from django.conf import settings
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '') or os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
+        azure_account = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '') or os.getenv('AZURE_STORAGE_ACCOUNT_NAME', '')
+        
+        if azure_conn and azure_account:
+            from storages.backends.azure_storage import AzureStorage
+            storage = AzureStorage()
+        else:
+            storage = default_storage
+        
         try:
-            saved_path = default_storage.save(filename, file_obj)
+            saved_path = storage.save(filename, file_obj)
             if not saved_path:
                 return Response({"detail": "Failed to save file"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
-            # Debug: Log saved_path
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"File saved to path: {saved_path}")
-            
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to save file: {str(e)}")
+            logger.error(f"Failed to save file: {str(e)}", exc_info=True)
             return Response({"detail": f"Failed to save file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Lấy URL của file đã lưu - luôn tạo URL thủ công cho Azure để đảm bảo đúng format
         try:
             azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '')
             if azure_conn:
-                # Azure Blob Storage - tạo URL thủ công
                 account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
                 container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
-                # Đảm bảo saved_path không có container name ở đầu
+                
                 blob_path = saved_path
                 if blob_path.startswith(container + '/'):
                     blob_path = blob_path[len(container) + 1:]
                 elif blob_path.startswith('/' + container + '/'):
                     blob_path = blob_path[len('/' + container) + 1:]
+                
                 avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}"
+                
+                if azure_conn and azure_account:
+                    try:
+                        storage_url = storage.url(saved_path)
+                        if storage_url and storage_url.startswith('http'):
+                            avatar_url = storage_url
+                    except Exception:
+                        pass
             else:
-                # Local storage
                 avatar_url = default_storage.url(saved_path)
                 if not avatar_url.startswith('http') and not avatar_url.startswith('/media/'):
                     avatar_url = f"/media/{avatar_url}"
@@ -367,14 +348,12 @@ class UpdateAvatarView(APIView):
             else:
                 avatar_url = f"/media/{saved_path}"
         
-        # Cập nhật URL avatar trong database
         user.avatar = avatar_url
         user.save()
 
         return Response({"avatarUrl": avatar_url}, status=status.HTTP_200_OK)
 
 
-# -------- Delete Account --------
 class DeleteAccountView(APIView):
     @require_auth
     def delete(self, request):
@@ -384,13 +363,11 @@ class DeleteAccountView(APIView):
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Kiểm tra mật khẩu nếu được cung cấp (cho user có password)
         password = request.data.get('password')
         if user.password_hash and password:
             if not check_password(password, user.password_hash):
                 return Response({"detail": "Invalid password"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Xóa user (cascade sẽ tự động xóa các related documents)
         user.delete()
 
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -413,22 +390,18 @@ class ChangePasswordView(APIView):
             return Response({"detail": "oldPassword and newPassword are required"}, 
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Kiểm tra user có password hay không (có thể là OAuth-only user)
         if not user.password_hash:
             return Response({"detail": "This account does not have a password. Please use social login."}, 
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Kiểm tra mật khẩu cũ
         if not check_password(old_password, user.password_hash):
             return Response({"detail": "Old password is incorrect"}, 
                           status=status.HTTP_401_UNAUTHORIZED)
 
-        # Validate mật khẩu mới
         if len(new_password) < 6:
             return Response({"detail": "New password must be at least 6 characters"}, 
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Cập nhật mật khẩu
         user.password_hash = hash_password(new_password)
         user.save()
 
@@ -439,7 +412,6 @@ class ChangePasswordView(APIView):
 class AddressListView(APIView):
     @require_auth
     def get(self, request):
-        """Lấy danh sách địa chỉ của user"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -466,7 +438,6 @@ class AddressListView(APIView):
 
     @require_auth
     def post(self, request):
-        """Thêm địa chỉ mới"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -482,11 +453,9 @@ class AddressListView(APIView):
 
         is_default = request.data.get('is_default', False)
         
-        # Nếu đặt làm mặc định, bỏ default của các địa chỉ khác
         if is_default:
             Address.objects(user=user, is_default=True).update(is_default=False)
 
-        # Tạo địa chỉ mới
         address = Address(
             user=user,
             receiver=request.data['receiver'],
@@ -514,7 +483,6 @@ class AddressListView(APIView):
 class AddressDetailView(APIView):
     @require_auth
     def put(self, request, address_id):
-        """Cập nhật địa chỉ"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -526,7 +494,6 @@ class AddressDetailView(APIView):
         except Address.DoesNotExist:
             return Response({"detail": "Address not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Cập nhật các trường
         if 'receiver' in request.data:
             address.receiver = request.data['receiver']
         if 'detail' in request.data:
@@ -542,7 +509,6 @@ class AddressDetailView(APIView):
         if 'is_default' in request.data:
             is_default = request.data['is_default']
             if is_default:
-                # Bỏ default của các địa chỉ khác
                 Address.objects(user=user, is_default=True).update(is_default=False)
             address.is_default = is_default
 
@@ -562,7 +528,6 @@ class AddressDetailView(APIView):
 
     @require_auth
     def delete(self, request, address_id):
-        """Xóa địa chỉ"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -581,7 +546,6 @@ class AddressDetailView(APIView):
 class AddressSetDefaultView(APIView):
     @require_auth
     def patch(self, request, address_id):
-        """Thiết lập địa chỉ mặc định"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -593,10 +557,7 @@ class AddressSetDefaultView(APIView):
         except Address.DoesNotExist:
             return Response({"detail": "Address not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Bỏ default của tất cả địa chỉ khác
         Address.objects(user=user, is_default=True).update(is_default=False)
-        
-        # Set địa chỉ này làm default
         address.is_default = True
         address.save()
 
@@ -610,14 +571,12 @@ class AddressSetDefaultView(APIView):
 class SocialLinksView(APIView):
     @require_auth
     def get(self, request):
-        """Lấy trạng thái liên kết MXH"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Kiểm tra provider nào đã được link
         google_linked = any(p.provider == 'google' for p in user.providers)
         facebook_linked = any(p.provider == 'facebook' for p in user.providers)
 
@@ -630,7 +589,6 @@ class SocialLinksView(APIView):
 class LinkGoogleView(APIView):
     @require_auth
     def post(self, request):
-        """Liên kết tài khoản Google"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -646,7 +604,6 @@ class LinkGoogleView(APIView):
 
         try:
             import requests
-            # Verify token bằng Google API
             if access_token:
                 userinfo_response = requests.get(
                     "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -654,7 +611,6 @@ class LinkGoogleView(APIView):
                     timeout=10
                 )
             else:
-                # Verify id_token
                 userinfo_response = requests.get(
                     f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}",
                     timeout=10
@@ -675,7 +631,6 @@ class LinkGoogleView(APIView):
             return Response({"detail": "Invalid Google token"}, 
                           status=status.HTTP_401_UNAUTHORIZED)
 
-        # Kiểm tra xem đã link chưa
         already_linked = any(p.provider == 'google' and p.provider_user_id == google_id 
                            for p in user.providers)
         
@@ -688,14 +643,12 @@ class LinkGoogleView(APIView):
 
     @require_auth
     def delete(self, request):
-        """Hủy liên kết tài khoản Google"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Xóa provider Google
         user.providers = [p for p in user.providers if p.provider != 'google']
         user.save()
 
@@ -705,7 +658,6 @@ class LinkGoogleView(APIView):
 class LinkFacebookView(APIView):
     @require_auth
     def post(self, request):
-        """Liên kết tài khoản Facebook"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -720,7 +672,6 @@ class LinkFacebookView(APIView):
 
         try:
             import requests
-            # Verify token
             FB_APP_ID = os.getenv("FB_APP_ID", "") or os.getenv("FACEBOOK_APP_ID", "")
             FB_APP_SECRET = os.getenv("FB_APP_SECRET", "") or os.getenv("FACEBOOK_APP_SECRET", "")
             
@@ -735,7 +686,6 @@ class LinkFacebookView(APIView):
                 return Response({"detail": "Invalid Facebook token"}, 
                               status=status.HTTP_401_UNAUTHORIZED)
 
-            # Lấy profile
             me = requests.get(
                 "https://graph.facebook.com/me",
                 params={"fields": "id", "access_token": access_token},
@@ -751,7 +701,6 @@ class LinkFacebookView(APIView):
             return Response({"detail": "Invalid Facebook token"}, 
                           status=status.HTTP_401_UNAUTHORIZED)
 
-        # Kiểm tra xem đã link chưa
         already_linked = any(p.provider == 'facebook' and p.provider_user_id == fb_id 
                            for p in user.providers)
         
@@ -764,14 +713,12 @@ class LinkFacebookView(APIView):
 
     @require_auth
     def delete(self, request):
-        """Hủy liên kết tài khoản Facebook"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Xóa provider Facebook
         user.providers = [p for p in user.providers if p.provider != 'facebook']
         user.save()
 
@@ -782,7 +729,6 @@ class LinkFacebookView(APIView):
 class NotificationSettingsView(APIView):
     @require_auth
     def get(self, request):
-        """Lấy cài đặt thông báo"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
@@ -800,14 +746,12 @@ class NotificationSettingsView(APIView):
 
     @require_auth
     def put(self, request):
-        """Cập nhật cài đặt thông báo"""
         try:
             user_id = request.user_claims['sub']
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Cập nhật các trường boolean nếu có trong request
         boolean_fields = ['emailNotif', 'emailUpdate', 'emailSale', 'emailSurvey', 'smsNotif', 'smsSale']
         
         for field in boolean_fields:
