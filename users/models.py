@@ -28,6 +28,14 @@ class User(me.Document):
     # --- Tham chiếu đến các collection khác ---
     vouchers = me.ListField(me.ObjectIdField())
 
+    # --- Notification settings ---
+    emailNotif = me.BooleanField(default=True)
+    emailUpdate = me.BooleanField(default=True)
+    emailSale = me.BooleanField(default=True)
+    emailSurvey = me.BooleanField(default=True)
+    smsNotif = me.BooleanField(default=False)
+    smsSale = me.BooleanField(default=False)
+
     # --- Metadata ---
     created_at = me.DateTimeField(default=datetime.utcnow)
 
