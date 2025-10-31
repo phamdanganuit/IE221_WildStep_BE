@@ -163,6 +163,23 @@ class ProfileView(APIView):
 
         if 'displayName' in request.data:
             user.displayName = request.data['displayName']
+        
+        if 'email' in request.data:
+            email = (request.data['email'] or "").strip().lower()
+            if email:
+                # Validate email format
+                try:
+                    validate_email(email, check_deliverability=False)
+                except EmailNotValidError:
+                    return Response({"detail": "invalid email"}, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Check if email is already used by another user
+                existing_user = User.objects(email=email).first()
+                if existing_user and str(existing_user.id) != user_id:
+                    return Response({"detail": "Email already registered"}, status=status.HTTP_409_CONFLICT)
+                
+                user.email = email
+        
         if 'phone' in request.data:
             user.phone = request.data['phone']
         if 'sex' in request.data:
@@ -180,7 +197,10 @@ class ProfileView(APIView):
             else:
                 user.birth = None
 
-        user.save()
+        try:
+            user.save()
+        except NotUniqueError:
+            return Response({"detail": "Email already registered"}, status=status.HTTP_409_CONFLICT)
 
         return Response({
             "id": str(user.id),
@@ -205,8 +225,23 @@ class UpdateProfileView(APIView):
 
         if 'displayName' in request.data:
             user.displayName = request.data['displayName']
+        
         if 'email' in request.data:
-            user.email = request.data['email']
+            email = (request.data['email'] or "").strip().lower()
+            if email:
+                # Validate email format
+                try:
+                    validate_email(email, check_deliverability=False)
+                except EmailNotValidError:
+                    return Response({"detail": "invalid email"}, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Check if email is already used by another user
+                existing_user = User.objects(email=email).first()
+                if existing_user and str(existing_user.id) != user_id:
+                    return Response({"detail": "Email already registered"}, status=status.HTTP_409_CONFLICT)
+                
+                user.email = email
+        
         if 'phone' in request.data:
             user.phone = request.data['phone']
         
@@ -228,7 +263,10 @@ class UpdateProfileView(APIView):
             else:
                 user.birth = None
 
-        user.save()
+        try:
+            user.save()
+        except NotUniqueError:
+            return Response({"detail": "Email already registered"}, status=status.HTTP_409_CONFLICT)
 
         return Response({
             "id": str(user.id),
