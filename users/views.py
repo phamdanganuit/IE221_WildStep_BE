@@ -6,6 +6,7 @@ from email_validator import validate_email, EmailNotValidError
 from mongoengine.errors import NotUniqueError, ValidationError as MEValidationError
 from datetime import datetime
 import os
+from django.core.files.storage import default_storage
 from .models import User , Address
 from .auth import hash_password, check_password, create_jwt, require_auth, require_admin
 
@@ -288,22 +289,43 @@ class UpdateAvatarView(APIView):
             return Response({"detail": "File too large. Maximum size is 1MB"}, 
                           status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
+        # Xóa ảnh cũ nếu có
+        if user.avatar:
+            try:
+                # Lấy path tương đối từ URL (bỏ MEDIA_URL prefix nếu có)
+                old_path = user.avatar
+                if old_path.startswith('/media/'):
+                    old_path = old_path.replace('/media/', '')
+                elif old_path.startswith('https://'):
+                    # URL từ Azure Blob, cần extract path từ URL
+                    from urllib.parse import urlparse
+                    from django.conf import settings
+                    parsed = urlparse(old_path)
+                    container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
+                    old_path = parsed.path.lstrip('/').replace(f'{container}/', '')
+                
+                if default_storage.exists(old_path):
+                    default_storage.delete(old_path)
+            except Exception:
+                pass  # Bỏ qua nếu không xóa được
+
         # Tạo tên file unique
         import uuid
         ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'jpg'
-        filename = f"avatar_{user_id}_{uuid.uuid4().hex[:8]}.{ext}"
+        filename = f"avatars/avatar_{user_id}_{uuid.uuid4().hex[:8]}.{ext}"
         
-        # Lưu file (tạm thời lưu local, sau này có thể upload lên cloud storage)
-        upload_dir = os.path.join('media', 'avatars')
-        os.makedirs(upload_dir, exist_ok=True)
-        filepath = os.path.join(upload_dir, filename)
+        # Lưu file vào storage (Azure Blob hoặc local tùy cấu hình)
+        saved_path = default_storage.save(filename, file_obj)
         
-        with open(filepath, 'wb+') as destination:
-            for chunk in file_obj.chunks():
-                destination.write(chunk)
+        # Lấy URL của file đã lưu
+        from django.conf import settings
+        avatar_url = default_storage.url(saved_path)
+        
+        # Nếu là local storage, đảm bảo URL có /media/ prefix
+        if not avatar_url.startswith('http') and not avatar_url.startswith('/media/'):
+            avatar_url = f"/media/{avatar_url}"
         
         # Cập nhật URL avatar trong database
-        avatar_url = f"/media/avatars/{filename}"  # URL tương đối
         user.avatar = avatar_url
         user.save()
 

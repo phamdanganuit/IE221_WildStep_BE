@@ -13,3 +13,5 @@ requests>=2.32,<3.0
 
 gunicorn
 whitenoise
+django-storages
+azure-storage-blob

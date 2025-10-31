@@ -14,6 +14,7 @@ INSTALLED_APPS = [
     "django.contrib.admin","django.contrib.auth","django.contrib.contenttypes",
     "django.contrib.sessions","django.contrib.messages","django.contrib.staticfiles",
     "rest_framework","corsheaders",'users.apps.UsersConfig','orders.apps.OrdersConfig','notifications.apps.NotificationsConfig',
+    "storages",  # For Azure Blob Storage
 ]
 
 MIDDLEWARE = [
@@ -66,8 +67,22 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Media files (uploads)
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+# Sử dụng Azure Blob Storage nếu có connection string, ngược lại dùng local
+AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+AZURE_STORAGE_ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+AZURE_STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER", "media")
+
+if AZURE_STORAGE_CONNECTION_STRING:
+    # Sử dụng Azure Blob Storage
+    DEFAULT_FILE_STORAGE = "storages.backends.azure_storage.AzureStorage"
+    AZURE_CONTAINER = AZURE_STORAGE_CONTAINER
+    AZURE_CONNECTION_STRING = AZURE_STORAGE_CONNECTION_STRING
+    MEDIA_URL = os.getenv("MEDIA_URL", f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{AZURE_STORAGE_CONTAINER}/")
+    MEDIA_ROOT = None  # Không dùng local storage
+else:
+    # Fallback về local storage (development)
+    MEDIA_URL = "/media/"
+    MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
