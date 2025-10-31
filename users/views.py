@@ -315,15 +315,42 @@ class UpdateAvatarView(APIView):
         filename = f"avatars/avatar_{user_id}_{uuid.uuid4().hex[:8]}.{ext}"
         
         # Lưu file vào storage (Azure Blob hoặc local tùy cấu hình)
-        saved_path = default_storage.save(filename, file_obj)
+        try:
+            saved_path = default_storage.save(filename, file_obj)
+            if not saved_path:
+                return Response({"detail": "Failed to save file"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({"detail": f"Failed to save file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         # Lấy URL của file đã lưu
         from django.conf import settings
-        avatar_url = default_storage.url(saved_path)
-        
-        # Nếu là local storage, đảm bảo URL có /media/ prefix
-        if not avatar_url.startswith('http') and not avatar_url.startswith('/media/'):
-            avatar_url = f"/media/{avatar_url}"
+        try:
+            avatar_url = default_storage.url(saved_path)
+            
+            # Nếu URL là None hoặc rỗng, tạo URL thủ công
+            if not avatar_url:
+                # Tạo URL dựa trên cấu hình
+                azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '')
+                if azure_conn:
+                    # Azure Blob Storage
+                    account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
+                    container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
+                    avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{saved_path}"
+                else:
+                    # Local storage
+                    avatar_url = f"/media/{saved_path}"
+            # Nếu là local storage, đảm bảo URL có /media/ prefix
+            elif not avatar_url.startswith('http') and not avatar_url.startswith('/media/'):
+                avatar_url = f"/media/{avatar_url}"
+        except Exception as e:
+            # Fallback nếu không lấy được URL
+            azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '')
+            if azure_conn:
+                account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
+                container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
+                avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{saved_path}"
+            else:
+                avatar_url = f"/media/{saved_path}"
         
         # Cập nhật URL avatar trong database
         user.avatar = avatar_url

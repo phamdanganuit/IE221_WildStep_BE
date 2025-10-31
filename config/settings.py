@@ -78,7 +78,8 @@ if AZURE_STORAGE_CONNECTION_STRING:
     AZURE_CONTAINER = AZURE_STORAGE_CONTAINER
     AZURE_CONNECTION_STRING = AZURE_STORAGE_CONNECTION_STRING
     MEDIA_URL = os.getenv("MEDIA_URL", f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{AZURE_STORAGE_CONTAINER}/")
-    MEDIA_ROOT = None  # Không dùng local storage
+    # MEDIA_ROOT vẫn cần có giá trị (django-storages có thể cần)
+    MEDIA_ROOT = BASE_DIR / "media"  # Vẫn tạo thư mục nhưng không dùng
 else:
     # Fallback về local storage (development)
     MEDIA_URL = "/media/"
