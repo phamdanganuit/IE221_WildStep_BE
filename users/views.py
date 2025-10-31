@@ -315,40 +315,55 @@ class UpdateAvatarView(APIView):
         filename = f"avatars/avatar_{user_id}_{uuid.uuid4().hex[:8]}.{ext}"
         
         # Lưu file vào storage (Azure Blob hoặc local tùy cấu hình)
+        from django.conf import settings
         try:
             saved_path = default_storage.save(filename, file_obj)
             if not saved_path:
                 return Response({"detail": "Failed to save file"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Debug: Log saved_path
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"File saved to path: {saved_path}")
+            
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to save file: {str(e)}")
             return Response({"detail": f"Failed to save file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Lấy URL của file đã lưu
-        from django.conf import settings
+        # Lấy URL của file đã lưu - luôn tạo URL thủ công cho Azure để đảm bảo đúng format
         try:
-            avatar_url = default_storage.url(saved_path)
-            
-            # Nếu URL là None hoặc rỗng, tạo URL thủ công
-            if not avatar_url:
-                # Tạo URL dựa trên cấu hình
-                azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '')
-                if azure_conn:
-                    # Azure Blob Storage
-                    account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
-                    container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
-                    avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{saved_path}"
-                else:
-                    # Local storage
-                    avatar_url = f"/media/{saved_path}"
-            # Nếu là local storage, đảm bảo URL có /media/ prefix
-            elif not avatar_url.startswith('http') and not avatar_url.startswith('/media/'):
-                avatar_url = f"/media/{avatar_url}"
+            azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '')
+            if azure_conn:
+                # Azure Blob Storage - tạo URL thủ công
+                account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
+                container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
+                # Đảm bảo saved_path không có container name ở đầu
+                blob_path = saved_path
+                if blob_path.startswith(container + '/'):
+                    blob_path = blob_path[len(container) + 1:]
+                elif blob_path.startswith('/' + container + '/'):
+                    blob_path = blob_path[len('/' + container) + 1:]
+                avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}"
+            else:
+                # Local storage
+                avatar_url = default_storage.url(saved_path)
+                if not avatar_url.startswith('http') and not avatar_url.startswith('/media/'):
+                    avatar_url = f"/media/{avatar_url}"
         except Exception as e:
-            # Fallback nếu không lấy được URL
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to get URL: {str(e)}")
+            # Fallback
             azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '')
             if azure_conn:
                 account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
                 container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
-                avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{saved_path}"
+                blob_path = saved_path
+                if blob_path.startswith(container + '/'):
+                    blob_path = blob_path[len(container) + 1:]
+                avatar_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}"
             else:
                 avatar_url = f"/media/{saved_path}"
         

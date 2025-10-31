@@ -72,7 +72,7 @@ AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "
 AZURE_STORAGE_ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
 AZURE_STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER", "media")
 
-if AZURE_STORAGE_CONNECTION_STRING:
+if AZURE_STORAGE_CONNECTION_STRING and AZURE_STORAGE_ACCOUNT_NAME:
     # Sử dụng Azure Blob Storage
     DEFAULT_FILE_STORAGE = "storages.backends.azure_storage.AzureStorage"
     AZURE_CONTAINER = AZURE_STORAGE_CONTAINER
@@ -80,10 +80,18 @@ if AZURE_STORAGE_CONNECTION_STRING:
     MEDIA_URL = os.getenv("MEDIA_URL", f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{AZURE_STORAGE_CONTAINER}/")
     # MEDIA_ROOT vẫn cần có giá trị (django-storages có thể cần)
     MEDIA_ROOT = BASE_DIR / "media"  # Vẫn tạo thư mục nhưng không dùng
+    
+    # Debug: Print để kiểm tra (remove sau khi debug xong)
+    print(f"[DEBUG] Azure Storage configured: account={AZURE_STORAGE_ACCOUNT_NAME}, container={AZURE_STORAGE_CONTAINER}")
 else:
     # Fallback về local storage (development)
+    DEFAULT_FILE_STORAGE = "django.core.files.storage.FileSystemStorage"
     MEDIA_URL = "/media/"
     MEDIA_ROOT = BASE_DIR / "media"
+    MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+    
+    # Debug: Print để kiểm tra
+    print(f"[DEBUG] Using local storage. Connection string present: {bool(AZURE_STORAGE_CONNECTION_STRING)}, Account name present: {bool(AZURE_STORAGE_ACCOUNT_NAME)}")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
