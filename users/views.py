@@ -205,7 +205,8 @@ class UpdateProfileView(APIView):
 
         if 'displayName' in request.data:
             user.displayName = request.data['displayName']
-        
+        if 'email' in request.data:
+            user.email = request.data['email']
         if 'phone' in request.data:
             user.phone = request.data['phone']
         
