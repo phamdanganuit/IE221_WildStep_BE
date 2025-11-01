@@ -36,6 +36,9 @@ class User(me.Document):
     smsNotif = me.BooleanField(default=False)
     smsSale = me.BooleanField(default=False)
 
+    # --- Admin settings ---
+    blocked = me.BooleanField(default=False)  # Admin can block user manually
+
     # --- Metadata ---
     created_at = me.DateTimeField(default=datetime.utcnow)
 
