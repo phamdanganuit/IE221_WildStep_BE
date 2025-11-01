@@ -9,6 +9,10 @@ from users.auth import require_admin
 from .models import Brand, ParentCategory, ChildCategory, Product
 from bson import ObjectId
 from bson.errors import InvalidId
+from django.core.files.storage import default_storage
+from django.conf import settings
+import os
+import uuid
 
 
 class BrandListView(APIView):
@@ -362,6 +366,11 @@ class ProductListView(APIView):
             category = ChildCategory.objects.get(id=ObjectId(category_id))
             brand = Brand.objects.get(id=ObjectId(brand_id))
             
+            # Handle images - can be array of URLs
+            images = request.data.get('images', [])
+            if not isinstance(images, list):
+                images = []
+            
             product = Product(
                 name=name,
                 slug=request.data.get('slug', ''),
@@ -373,7 +382,8 @@ class ProductListView(APIView):
                 category=category,
                 status=request.data.get('status', 'active'),
                 specifications=request.data.get('specifications', {}),
-                tags=request.data.get('tags', [])
+                tags=request.data.get('tags', []),
+                images=images  # Support images in body
             )
             product.save()
             
@@ -386,6 +396,7 @@ class ProductListView(APIView):
                 "discountPrice": product.discount_price,
                 "stock": product.stock,
                 "status": product.status,
+                "images": product.images,
                 "createdAt": product.created_at.isoformat()
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
@@ -468,6 +479,10 @@ class ProductDetailView(APIView):
             product.specifications = request.data['specifications']
         if 'tags' in request.data:
             product.tags = request.data['tags']
+        if 'images' in request.data:
+            images = request.data['images']
+            if isinstance(images, list):
+                product.images = images
         
         try:
             product.save()
@@ -500,4 +515,129 @@ class ProductDetailView(APIView):
         
         product.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProductImageUploadView(APIView):
+    """POST /api/admin/products/:id/images - Upload product images"""
+    parser_classes = [MultiPartParser, FormParser]
+    
+    @require_admin
+    def post(self, request, product_id):
+        try:
+            product = Product.objects.get(id=ObjectId(product_id))
+        except (InvalidId, Product.DoesNotExist):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Product not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get files from request
+        images = request.FILES.getlist('images')
+        
+        if not images:
+            return Response(
+                {"error": {"code": "MISSING_FIELD", "message": "No images provided"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate: max 5 files
+        if len(images) > 5:
+            return Response(
+                {"error": {"code": "FILE_TOO_LARGE", 
+                          "message": "Maximum 5 images allowed per upload"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        uploaded_urls = []
+        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+        max_size = 5 * 1024 * 1024  # 5MB
+        
+        # Get storage backend
+        azure_conn = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', '') or os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
+        azure_account = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '') or os.getenv('AZURE_STORAGE_ACCOUNT_NAME', '')
+        
+        if azure_conn and azure_account:
+            from storages.backends.azure_storage import AzureStorage
+            storage = AzureStorage()
+        else:
+            storage = default_storage
+        
+        for file_obj in images:
+            # Validate file type
+            if file_obj.content_type not in allowed_types:
+                continue  # Skip invalid files
+            
+            # Validate file size
+            if file_obj.size > max_size:
+                continue  # Skip oversized files
+            
+            try:
+                # Generate filename
+                ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'jpg'
+                filename = f"products/{product_id}_{uuid.uuid4().hex[:8]}.{ext}"
+                
+                # Save file
+                saved_path = storage.save(filename, file_obj)
+                
+                if not saved_path:
+                    continue
+                
+                # Generate URL
+                try:
+                    if azure_conn:
+                        account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
+                        container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
+                        
+                        blob_path = saved_path
+                        if blob_path.startswith(container + '/'):
+                            blob_path = blob_path[len(container) + 1:]
+                        elif blob_path.startswith('/' + container + '/'):
+                            blob_path = blob_path[len('/' + container) + 1:]
+                        
+                        image_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}"
+                        
+                        # Try to get URL from storage
+                        try:
+                            storage_url = storage.url(saved_path)
+                            if storage_url and storage_url.startswith('http'):
+                                image_url = storage_url
+                        except Exception:
+                            pass
+                    else:
+                        image_url = default_storage.url(saved_path)
+                        if not image_url.startswith('http') and not image_url.startswith('/media/'):
+                            image_url = f"/media/{image_url}"
+                    
+                    uploaded_urls.append(image_url)
+                except Exception:
+                    # Fallback URL generation
+                    if azure_conn:
+                        account_name = getattr(settings, 'AZURE_STORAGE_ACCOUNT_NAME', '')
+                        container = getattr(settings, 'AZURE_STORAGE_CONTAINER', 'media')
+                        blob_path = saved_path
+                        if blob_path.startswith(container + '/'):
+                            blob_path = blob_path[len(container) + 1:]
+                        image_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}"
+                    else:
+                        image_url = f"/media/{saved_path}"
+                    uploaded_urls.append(image_url)
+                    
+            except Exception as e:
+                # Skip file if upload fails
+                continue
+        
+        if not uploaded_urls:
+            return Response(
+                {"error": {"code": "UPLOAD_FAILED", "message": "No valid images were uploaded"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Add new images to product (append, not replace)
+        existing_images = product.images or []
+        product.images = existing_images + uploaded_urls
+        product.save()
+        
+        return Response({
+            "images": product.images
+        }, status=status.HTTP_200_OK)
 
