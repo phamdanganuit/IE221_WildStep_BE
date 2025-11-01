@@ -206,5 +206,136 @@ class CustomerListView(APIView):
         })
 
 
-# TODO: Implement CustomerDetailView, DashboardStatsView
+class CustomerDetailView(APIView):
+    """GET /api/admin/customers/:id - Customer detail with order history"""
+    @require_admin
+    def get(self, request, customer_id):
+        try:
+            user = User.objects.get(id=ObjectId(customer_id), role="user")
+        except (User.DoesNotExist, Exception):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Customer not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get customer orders
+        orders = Order.objects(user=user).order_by('-created_at')
+        total_orders = orders.count()
+        
+        # Calculate stats
+        completed_orders = orders.filter(status='completed')
+        total_spent = sum(order.total_price for order in completed_orders)
+        avg_order_value = total_spent / total_orders if total_orders > 0 else 0
+        
+        # Get first and last order
+        first_order = orders.order_by('created_at').first()
+        last_order = orders.order_by('-created_at').first()
+        
+        # Calculate status
+        is_vip = total_orders > 10
+        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        recent_order = orders.filter(created_at__gte=thirty_days_ago).first()
+        
+        if user.blocked:
+            customer_status = "blocked"
+        elif is_vip:
+            customer_status = "vip"
+        elif recent_order:
+            customer_status = "active"
+        else:
+            customer_status = "inactive"
+        
+        # Get recent orders (last 10)
+        recent_orders_data = []
+        for order in orders[:10]:
+            recent_orders_data.append({
+                "id": str(order.id),
+                "orderNumber": order.order_number,
+                "total": order.total_price,
+                "status": order.status,
+                "orderDate": order.created_at.isoformat()
+            })
+        
+        # Get addresses
+        from users.models import Address
+        addresses = Address.objects(user=user)
+        addresses_data = [
+            {
+                "id": str(addr.id),
+                "receiver": addr.receiver,
+                "detail": addr.detail,
+                "ward": addr.ward,
+                "district": addr.district,
+                "province": addr.province,
+                "phone": addr.phone,
+                "is_default": addr.is_default
+            }
+            for addr in addresses
+        ]
+        
+        return Response({
+            "id": str(user.id),
+            "name": user.displayName or user.username or user.email,
+            "displayName": user.displayName,
+            "email": user.email,
+            "phone": user.phone,
+            "avatar": user.avatar,
+            "addresses": addresses_data,
+            "totalOrders": total_orders,
+            "totalSpent": total_spent,
+            "averageOrderValue": avg_order_value,
+            "lastOrder": last_order.created_at.isoformat() if last_order else None,
+            "status": customer_status,
+            "isVip": is_vip,
+            "joinDate": user.created_at.isoformat(),
+            "orders": recent_orders_data,
+            "orderHistory": {
+                "totalOrders": total_orders,
+                "totalSpent": total_spent,
+                "averageOrderValue": avg_order_value,
+                "firstOrderDate": first_order.created_at.isoformat() if first_order else None,
+                "lastOrderDate": last_order.created_at.isoformat() if last_order else None
+            }
+        })
+
+
+class CustomerStatusUpdateView(APIView):
+    """PATCH /api/admin/customers/:id/status - Update customer status (block/unblock)"""
+    @require_admin
+    def patch(self, request, customer_id):
+        try:
+            user = User.objects.get(id=ObjectId(customer_id), role="user")
+        except (User.DoesNotExist, Exception):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Customer not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        new_status = request.data.get('status')
+        if not new_status:
+            return Response(
+                {"error": {"code": "MISSING_FIELD", "message": "Status is required"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Only allow blocked status to be set manually
+        if new_status == 'blocked':
+            user.blocked = True
+        elif new_status in ['active', 'inactive', 'vip']:
+            # These are calculated, unblock user
+            user.blocked = False
+        else:
+            return Response(
+                {"error": {"code": "INVALID_STATUS", 
+                          "message": "Invalid status. Only 'blocked' can be set manually"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user.save()
+        
+        return Response({
+            "id": str(user.id),
+            "blocked": user.blocked,
+            "message": "Customer status updated"
+        })
 

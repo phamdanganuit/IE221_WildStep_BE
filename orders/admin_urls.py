@@ -4,7 +4,7 @@ Admin URLs for orders and customers management
 from django.urls import path
 from .admin_views import (
     OrderListView, OrderDetailView, OrderStatusUpdateView,
-    CustomerListView,
+    CustomerListView, CustomerDetailView, CustomerStatusUpdateView,
 )
 from .dashboard_views import DashboardStatsView, AnalyticsView
 
@@ -20,6 +20,7 @@ urlpatterns = [
     
     # Customers
     path("customers", CustomerListView.as_view(), name="admin_customers"),
-    # path("customers/<str:customer_id>", CustomerDetailView.as_view(), name="admin_customer_detail"),
+    path("customers/<str:customer_id>", CustomerDetailView.as_view(), name="admin_customer_detail"),
+    path("customers/<str:customer_id>/status", CustomerStatusUpdateView.as_view(), name="admin_customer_status"),
 ]
 
