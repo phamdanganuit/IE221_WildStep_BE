@@ -1,11 +1,11 @@
-# Hướng dẫn Testing Admin APIs
+# Hướng dẫn Testing Admin APIs với Postman
 
 ## Mục lục
 1. [Chuẩn bị](#chuẩn-bị)
-2. [Authentication](#authentication)
-3. [Testing với Postman](#testing-với-postman)
-4. [Testing với cURL](#testing-với-curl)
-5. [Test từng API](#test-từng-api)
+2. [Setup Postman](#setup-postman)
+3. [Authentication](#authentication)
+4. [Test từng API](#test-từng-api)
+5. [Test Scenarios](#test-scenarios)
 6. [Troubleshooting](#troubleshooting)
 
 ---
@@ -75,62 +75,78 @@ Content-Type: application/json
 
 ## Authentication
 
-Tất cả Admin APIs yêu cầu Bearer token trong header:
+### Bước 1: Login để lấy Token
 
+1. Tạo request mới trong folder **"1. Authentication"**
+2. **Method**: `POST`
+3. **URL**: `{{base_url}}/api/login`
+4. **Body** (tab Body > raw > JSON):
+```json
+{
+  "email": "admin@example.com",
+  "password": "admin123456"
+}
 ```
-Authorization: Bearer <access_token>
-Content-Type: application/json
-```
+5. Click **Send**
+6. Copy `access_token` từ response
+7. Vào **Environment** > Paste token vào variable `token` > **Save**
 
-**Lưu ý:** User phải có `role: "admin"` trong JWT token.
+### Bước 2: Verify Token
+
+Tất cả requests trong collection sẽ tự động dùng `{{token}}` từ environment.
+
+**Lưu ý:** 
+- User phải có `role: "admin"` trong JWT token
+- Token có thể hết hạn → login lại để lấy token mới
 
 ---
 
-## Testing với Postman
+## Setup Postman
 
-### 1. Setup Environment
+### 1. Tạo Environment
 
-Tạo Environment trong Postman với các variables:
-- `base_url`: `http://localhost:8000`
-- `token`: `<access_token từ login>`
+1. Click **Environments** (icon bên trái) > **+** để tạo mới
+2. Đặt tên: **"Shoe Shop Admin"**
+3. Thêm các variables:
 
-### 2. Setup Authorization
+| Variable | Initial Value | Current Value |
+|----------|---------------|---------------|
+| `base_url` | `http://localhost:8000` | `http://localhost:8000` |
+| `token` | (để trống) | (sẽ set sau khi login) |
+| `product_id` | (để trống) | (sẽ set sau khi tạo product) |
+| `brand_id` | (để trống) | (sẽ set sau khi tạo brand) |
+| `category_id` | (để trống) | (sẽ set sau khi tạo category) |
+| `order_id` | (để trống) | (sẽ set sau khi tạo order) |
+| `customer_id` | (để trống) | (sẽ set sau khi tạo customer) |
 
-Trong Postman:
-1. Vào tab **Authorization**
-2. Chọn Type: **Bearer Token**
-3. Paste token vào **Token** field
+4. Click **Save**
 
-Hoặc thêm vào Header:
-```
-Authorization: Bearer {{token}}
-```
+### 2. Tạo Collection
 
-### 3. Tạo Collection
+1. Click **New** > **Collection**
+2. Đặt tên: **"Admin APIs - Shoe Shop"**
+3. Tạo folders để organize:
+   - **1. Authentication**
+   - **2. Dashboard & Analytics**
+   - **3. Products**
+   - **4. Brands**
+   - **5. Categories**
+   - **6. Orders**
+   - **7. Customers**
 
-Tạo collection **"Admin APIs"** và organize theo nhóm:
-- Dashboard & Analytics
-- Products
-- Brands
-- Categories
-- Orders
-- Customers
+### 3. Setup Collection Authorization
 
----
+1. Vào **Collection** > Tab **Authorization**
+2. Type: **Bearer Token**
+3. Token: `{{token}}`
+4. Click **Save**
 
-## Testing với cURL
+→ Tất cả requests trong collection sẽ tự động dùng token này!
 
-### Setup token variable (PowerShell)
-```powershell
-$TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-$BASE_URL = "http://localhost:8000"
-```
+### 4. Setup Collection Variables
 
-### Setup token variable (Bash)
-```bash
-export TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-export BASE_URL="http://localhost:8000"
-```
+Vào **Collection** > Tab **Variables**:
+- Thêm `base_url`: `http://localhost:8000`
 
 ---
 
@@ -139,15 +155,14 @@ export BASE_URL="http://localhost:8000"
 ### 🏠 1. Dashboard & Analytics
 
 #### GET Dashboard Stats
-```bash
-# cURL
-curl -X GET "$BASE_URL/api/admin/dashboard/stats?period=month" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json"
 
-# Postman
-GET {{base_url}}/api/admin/dashboard/stats?period=month
-```
+**Postman Setup:**
+1. Tạo request trong folder **"2. Dashboard & Analytics"**
+2. **Method**: `GET`
+3. **URL**: `{{base_url}}/api/admin/dashboard/stats`
+4. **Params** (tab Params):
+   - Key: `period`, Value: `month` (có thể chọn: `week`, `month`, `year`)
+5. Click **Send**
 
 **Response:**
 ```json
@@ -169,47 +184,55 @@ GET {{base_url}}/api/admin/dashboard/stats?period=month
 ```
 
 #### GET Analytics
-```bash
-curl -X GET "$BASE_URL/api/admin/analytics?period=month" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `GET`
+2. **URL**: `{{base_url}}/api/admin/analytics`
+3. **Params**: `period=month` (optional)
+4. Click **Send**
 
 ---
 
 ### 📦 2. Products Management
 
 #### GET Products List
-```bash
-curl -X GET "$BASE_URL/api/admin/products" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. Tạo request trong folder **"3. Products"**
+2. **Method**: `GET`
+3. **URL**: `{{base_url}}/api/admin/products`
+4. Click **Send**
 
 #### POST Create Product
-```bash
-curl -X POST "$BASE_URL/api/admin/products" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Nike Air Max 270",
-    "categoryId": "<child_category_id>",
-    "brandId": "<brand_id>",
-    "price": 3500000,
-    "description": "Giày thể thao cao cấp",
-    "stock": 45,
-    "discount": 10,
-    "status": "active",
-    "images": [
-      "/media/products/nike-air-max-270-1.jpg"
-    ],
-    "specifications": {
-      "size": ["38", "39", "40", "41", "42"],
-      "color": ["Đen", "Trắng", "Xám"],
-      "material": "Da tổng hợp",
-      "weight": "300g"
-    },
-    "tags": ["nike", "sports", "running"]
-  }'
+
+**Postman Setup:**
+1. **Method**: `POST`
+2. **URL**: `{{base_url}}/api/admin/products`
+3. **Body** (tab Body > raw > JSON):
+```json
+{
+  "name": "Nike Air Max 270",
+  "categoryId": "{{category_id}}",
+  "brandId": "{{brand_id}}",
+  "price": 3500000,
+  "description": "Giày thể thao cao cấp Nike Air Max 270 với công nghệ Air Max",
+  "stock": 45,
+  "discount": 10,
+  "status": "active",
+  "images": [
+    "/media/products/nike-air-max-270-1.jpg"
+  ],
+  "specifications": {
+    "size": ["38", "39", "40", "41", "42"],
+    "color": ["Đen", "Trắng", "Xám"],
+    "material": "Da tổng hợp",
+    "weight": "300g"
+  },
+  "tags": ["nike", "sports", "running"]
+}
 ```
+4. Click **Send**
+5. **Lưu product_id**: Copy `id` từ response > Vào Environment > Set `product_id` > Save
 
 **Response (201):**
 ```json
@@ -228,43 +251,49 @@ curl -X POST "$BASE_URL/api/admin/products" \
 ```
 
 #### GET Product Detail
-```bash
-curl -X GET "$BASE_URL/api/admin/products/<product_id>" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `GET`
+2. **URL**: `{{base_url}}/api/admin/products/{{product_id}}`
+3. Click **Send**
 
 #### PUT Update Product
-```bash
-curl -X PUT "$BASE_URL/api/admin/products/<product_id>" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "stock": 50,
-    "discount": 15,
-    "status": "active"
-  }'
+
+**Postman Setup:**
+1. **Method**: `PUT`
+2. **URL**: `{{base_url}}/api/admin/products/{{product_id}}`
+3. **Body** (raw > JSON):
+```json
+{
+  "stock": 50,
+  "discount": 15,
+  "status": "active",
+  "description": "Updated description"
+}
 ```
+4. Click **Send**
 
 #### DELETE Product
-```bash
-curl -X DELETE "$BASE_URL/api/admin/products/<product_id>" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `DELETE`
+2. **URL**: `{{base_url}}/api/admin/products/{{product_id}}`
+3. Click **Send**
 
 #### POST Upload Product Images
-```bash
-# cURL (multipart/form-data)
-curl -X POST "$BASE_URL/api/admin/products/<product_id>/images" \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "images=@/path/to/image1.jpg" \
-  -F "images=@/path/to/image2.jpg"
 
-# Postman
-# Method: POST
-# Body > form-data
-# Key: images (type: File), Value: [chọn file]
-# Có thể thêm nhiều images (max 5)
-```
+**Postman Setup:**
+1. **Method**: `POST`
+2. **URL**: `{{base_url}}/api/admin/products/{{product_id}}/images`
+3. **Body** (tab Body > form-data):
+   - Key: `images` (type: **File**), Value: [Browse file 1]
+   - Key: `images` (type: **File**), Value: [Browse file 2]
+   - ... (tối đa 5 files)
+4. **Lưu ý**: 
+   - File type: JPEG, PNG, WebP
+   - File size: Max 5MB mỗi file
+   - Max 5 files mỗi lần upload
+5. Click **Send**
 
 **Response:**
 ```json
@@ -281,63 +310,58 @@ curl -X POST "$BASE_URL/api/admin/products/<product_id>/images" \
 ### 🏷️ 3. Brands Management
 
 #### GET Brands List
-```bash
-curl -X GET "$BASE_URL/api/admin/brands" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. Tạo request trong folder **"4. Brands"**
+2. **Method**: `GET`
+3. **URL**: `{{base_url}}/api/admin/brands`
+4. Click **Send**
 
 #### POST Create Brand
-```bash
-curl -X POST "$BASE_URL/api/admin/brands" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Nike",
-    "description": "Thương hiệu thể thao hàng đầu",
-    "website": "https://www.nike.com",
-    "country": "USA",
-    "status": "active"
-  }'
-```
 
-**Response (201):**
+**Postman Setup:**
+1. **Method**: `POST`
+2. **URL**: `{{base_url}}/api/admin/brands`
+3. **Body** (raw > JSON):
 ```json
 {
-  "id": "60d5ec49f1b2c72b8c8e4f2b",
   "name": "Nike",
-  "slug": "nike",
-  "description": "Thương hiệu thể thao hàng đầu",
-  "logo": null,
+  "description": "Thương hiệu thể thao hàng đầu thế giới",
   "website": "https://www.nike.com",
   "country": "USA",
-  "status": "active",
-  "createdAt": "2025-11-01T10:00:00Z",
-  "updatedAt": "2025-11-01T10:00:00Z"
+  "status": "active"
 }
 ```
+4. Click **Send**
+5. **Lưu brand_id**: Copy `id` từ response > Set vào environment variable `brand_id`
 
 #### GET Brand Detail
-```bash
-curl -X GET "$BASE_URL/api/admin/brands/<brand_id>" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `GET`
+2. **URL**: `{{base_url}}/api/admin/brands/{{brand_id}}`
+3. Click **Send**
 
 #### PUT Update Brand
-```bash
-curl -X PUT "$BASE_URL/api/admin/brands/<brand_id>" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "description": "Updated description",
-    "status": "inactive"
-  }'
+
+**Postman Setup:**
+1. **Method**: `PUT`
+2. **URL**: `{{base_url}}/api/admin/brands/{{brand_id}}`
+3. **Body** (raw > JSON):
+```json
+{
+  "description": "Updated description",
+  "status": "inactive"
+}
 ```
+4. Click **Send**
 
 #### DELETE Brand
-```bash
-curl -X DELETE "$BASE_URL/api/admin/brands/<brand_id>" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `DELETE`
+2. **URL**: `{{base_url}}/api/admin/brands/{{brand_id}}`
+3. Click **Send**
 
 **Lưu ý:** Không thể xóa brand nếu có products đang sử dụng.
 
@@ -346,65 +370,85 @@ curl -X DELETE "$BASE_URL/api/admin/brands/<brand_id>" \
 ### 📁 4. Categories Management
 
 #### GET Categories List
-```bash
-curl -X GET "$BASE_URL/api/admin/categories" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. Tạo request trong folder **"5. Categories"**
+2. **Method**: `GET`
+3. **URL**: `{{base_url}}/api/admin/categories`
+4. Click **Send**
 
 **Response:** Trả về hierarchical structure (parent với children)
 
 #### POST Create Parent Category
-```bash
-curl -X POST "$BASE_URL/api/admin/categories" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Giày thể thao",
-    "type": "parent",
-    "description": "Danh mục giày thể thao",
-    "status": "active"
-  }'
+
+**Postman Setup:**
+1. **Method**: `POST`
+2. **URL**: `{{base_url}}/api/admin/categories`
+3. **Body** (raw > JSON):
+```json
+{
+  "name": "Giày thể thao",
+  "type": "parent",
+  "description": "Danh mục giày thể thao",
+  "status": "active"
+}
 ```
+4. Click **Send**
+5. **Lưu parent_category_id**: Copy `id` từ response
 
 #### POST Create Child Category
-```bash
-curl -X POST "$BASE_URL/api/admin/categories" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Giày chạy bộ",
-    "type": "child",
-    "parentId": "<parent_category_id>",
-    "description": "Giày dành cho chạy bộ",
-    "status": "active"
-  }'
+
+**Postman Setup:**
+1. **Method**: `POST`
+2. **URL**: `{{base_url}}/api/admin/categories`
+3. **Body** (raw > JSON):
+```json
+{
+  "name": "Giày chạy bộ",
+  "type": "child",
+  "parentId": "<parent_category_id>",
+  "description": "Giày dành cho chạy bộ",
+  "status": "active"
+}
 ```
+4. Click **Send**
+5. **Lưu category_id**: Copy `id` từ response > Set vào environment variable `category_id`
 
 ---
 
 ### 🛒 5. Orders Management
 
 #### GET Orders List
-```bash
-curl -X GET "$BASE_URL/api/admin/orders" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. Tạo request trong folder **"6. Orders"**
+2. **Method**: `GET`
+3. **URL**: `{{base_url}}/api/admin/orders`
+4. Click **Send**
 
 #### GET Order Detail
-```bash
-curl -X GET "$BASE_URL/api/admin/orders/<order_id>" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `GET`
+2. **URL**: `{{base_url}}/api/admin/orders/{{order_id}}`
+3. Click **Send**
 
 #### PATCH Update Order Status
-```bash
-curl -X PATCH "$BASE_URL/api/admin/orders/<order_id>/status" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "status": "processing"
-  }'
+
+**Postman Setup:**
+1. **Method**: `PATCH`
+2. **URL**: `{{base_url}}/api/admin/orders/{{order_id}}/status`
+3. **Body** (raw > JSON):
+```json
+{
+  "status": "processing"
+}
 ```
+4. Click **Send**
+
+**Test status transitions:**
+- ✅ `pending` → `processing` → `shipping` → `completed`
+- ❌ `completed` → `pending` (should fail)
 
 **Status transitions:**
 - `pending` → `processing` → `shipping` → `completed` ✅
@@ -415,21 +459,24 @@ curl -X PATCH "$BASE_URL/api/admin/orders/<order_id>/status" \
 ### 👥 6. Customers Management
 
 #### GET Customers List
-```bash
-curl -X GET "$BASE_URL/api/admin/customers" \
-  -H "Authorization: Bearer $TOKEN"
-```
 
-**Response includes:**
-- `totalOrders`, `totalSpent`, `averageOrderValue`
-- `isVip`: true if totalOrders > 10
-- `status`: `blocked` | `vip` | `active` | `inactive`
+**Postman Setup:**
+1. Tạo request trong folder **"7. Customers"**
+2. **Method**: `GET`
+3. **URL**: `{{base_url}}/api/admin/customers`
+4. Click **Send**
+
+**Verify trong response:**
+- `totalOrders`, `totalSpent`, `averageOrderValue` (auto-calculated)
+- `isVip`: `true` nếu totalOrders > 10
+- `status`: `blocked` | `vip` | `active` | `inactive` (auto-calculated)
 
 #### GET Customer Detail
-```bash
-curl -X GET "$BASE_URL/api/admin/customers/<customer_id>" \
-  -H "Authorization: Bearer $TOKEN"
-```
+
+**Postman Setup:**
+1. **Method**: `GET`
+2. **URL**: `{{base_url}}/api/admin/customers/{{customer_id}}`
+3. Click **Send**
 
 **Response includes:**
 - Full customer info
@@ -438,14 +485,19 @@ curl -X GET "$BASE_URL/api/admin/customers/<customer_id>" \
 - Addresses
 
 #### PATCH Update Customer Status (Block/Unblock)
-```bash
-curl -X PATCH "$BASE_URL/api/admin/customers/<customer_id>/status" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "status": "blocked"
-  }'
+
+**Postman Setup:**
+1. **Method**: `PATCH`
+2. **URL**: `{{base_url}}/api/admin/customers/{{customer_id}}/status`
+3. **Body** (raw > JSON):
+```json
+{
+  "status": "blocked"
+}
 ```
+4. Click **Send**
+
+**Lưu ý:** Chỉ có thể set `blocked` manually. `vip`, `active`, `inactive` được tính tự động.
 
 **Lưu ý:** Chỉ có thể set `blocked` manually. `vip`, `active`, `inactive` được tính tự động.
 
@@ -455,65 +507,51 @@ curl -X PATCH "$BASE_URL/api/admin/customers/<customer_id>/status" \
 
 ### Scenario 1: Tạo Brand → Category → Product
 
-```bash
-# 1. Tạo Brand
-BRAND_RESPONSE=$(curl -s -X POST "$BASE_URL/api/admin/brands" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Adidas",
-    "description": "Adidas brand",
-    "country": "Germany"
-  }')
-BRAND_ID=$(echo $BRAND_RESPONSE | jq -r '.id')
+**Workflow trong Postman:**
 
-# 2. Tạo Parent Category
-PARENT_RESPONSE=$(curl -s -X POST "$BASE_URL/api/admin/categories" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Giày thể thao",
-    "type": "parent"
-  }')
-PARENT_ID=$(echo $PARENT_RESPONSE | jq -r '.id')
+1. **Tạo Brand**
+   - POST `{{base_url}}/api/admin/brands`
+   - Body: `{"name": "Adidas", "country": "Germany"}`
+   - Copy `id` từ response → Set vào `brand_id` variable
 
-# 3. Tạo Child Category
-CHILD_RESPONSE=$(curl -s -X POST "$BASE_URL/api/admin/categories" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"Giày chạy bộ\",
-    \"type\": \"child\",
-    \"parentId\": \"$PARENT_ID\"
-  }")
-CHILD_ID=$(echo $CHILD_RESPONSE | jq -r '.id')
+2. **Tạo Parent Category**
+   - POST `{{base_url}}/api/admin/categories`
+   - Body: `{"name": "Giày thể thao", "type": "parent"}`
+   - Copy `id` từ response (lưu tạm)
 
-# 4. Tạo Product
-curl -X POST "$BASE_URL/api/admin/products" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"Adidas Ultraboost 22\",
-    \"categoryId\": \"$CHILD_ID\",
-    \"brandId\": \"$BRAND_ID\",
-    \"price\": 4200000,
-    \"stock\": 30,
-    \"description\": \"Giày chạy bộ Adidas\"
-  }"
-```
+3. **Tạo Child Category**
+   - POST `{{base_url}}/api/admin/categories`
+   - Body: `{"name": "Giày chạy bộ", "type": "child", "parentId": "<parent_id>"}`
+   - Copy `id` từ response → Set vào `category_id` variable
+
+4. **Tạo Product**
+   - POST `{{base_url}}/api/admin/products`
+   - Body:
+   ```json
+   {
+     "name": "Adidas Ultraboost 22",
+     "categoryId": "{{category_id}}",
+     "brandId": "{{brand_id}}",
+     "price": 4200000,
+     "stock": 30,
+     "description": "Giày chạy bộ Adidas"
+   }
+   ```
+   - Copy `id` từ response → Set vào `product_id` variable
 
 ### Scenario 2: Upload Images cho Product
 
-```bash
-# 1. Tạo product (như trên)
-PRODUCT_ID="<product_id>"
+**Workflow:**
 
-# 2. Upload images
-curl -X POST "$BASE_URL/api/admin/products/$PRODUCT_ID/images" \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "images=@/path/to/image1.jpg" \
-  -F "images=@/path/to/image2.jpg"
-```
+1. **Tạo Product** (như trên) → Có `product_id`
+
+2. **Upload Images**
+   - POST `{{base_url}}/api/admin/products/{{product_id}}/images`
+   - Body > form-data:
+     - `images`: [File] - chọn image1.jpg
+     - `images`: [File] - chọn image2.jpg
+   - Send
+   - Verify: Response có array `images` với URLs mới
 
 ### Scenario 3: Test Customer Status Logic
 
@@ -533,15 +571,9 @@ curl -X POST "$BASE_URL/api/admin/products/$PRODUCT_ID/images" \
 - Thiếu header Authorization
 
 **Giải pháp:**
-```bash
-# Login lại để lấy token mới
-curl -X POST "$BASE_URL/api/login" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "admin@example.com",
-    "password": "admin123456"
-  }'
-```
+1. Login lại trong Postman
+2. Copy token mới → Update vào environment variable `token`
+3. Save environment
 
 ### Lỗi 403 Forbidden
 **Nguyên nhân:**
@@ -577,9 +609,11 @@ curl -X POST "$BASE_URL/api/login" \
 - Storage không config đúng
 
 **Giải pháp:**
-- Kiểm tra file size và type
-- Verify Azure Storage config (nếu dùng)
-- Hoặc dùng local storage
+1. Kiểm tra trong Postman:
+   - File size < 5MB
+   - File type: JPEG, PNG, WebP
+2. Verify storage config trong `.env` hoặc `settings.py`
+3. Check server logs để xem error chi tiết
 
 ---
 
@@ -625,37 +659,116 @@ curl -X POST "$BASE_URL/api/login" \
 
 ---
 
-## Tips
+## Tips & Best Practices
 
-1. **Sử dụng Postman Variables:**
-   - Lưu `token`, `product_id`, `brand_id` trong variables
-   - Dùng `{{variable}}` trong requests
+### 1. Sử dụng Postman Variables
+- **Environment variables**: `{{token}}`, `{{base_url}}`, `{{product_id}}`
+- **Collection variables**: Shared cho toàn bộ collection
+- **Auto-save IDs**: Sau mỗi POST, copy `id` → Update variable
 
-2. **Test Error Cases:**
-   - Invalid ObjectId
-   - Missing required fields
-   - Invalid status transitions
-   - Delete resource with dependencies
+### 2. Sử dụng Tests Tab trong Postman
+**Example Test Script** (sau request Create Product):
+```javascript
+// Auto-save product_id
+if (pm.response.code === 201) {
+    var jsonData = pm.response.json();
+    pm.environment.set("product_id", jsonData.id);
+    pm.test("Product created successfully", function () {
+        pm.response.to.have.status(201);
+    });
+}
+```
 
-3. **Verify Data:**
-   - Check MongoDB sau mỗi operation
-   - Verify auto-generated fields (slug, order_number, etc.)
-   - Verify calculated fields (discount_price, status, isVip)
+### 3. Organize Requests
+- Sắp xếp theo thứ tự logical (Brand → Category → Product)
+- Đặt tên rõ ràng: "GET Products", "POST Create Product"
+- Thêm descriptions cho mỗi request
 
-4. **Performance Testing:**
-   - Test với large datasets
-   - Test pagination
-   - Monitor response times
+### 4. Test Error Cases
+- Invalid ObjectId format
+- Missing required fields
+- Invalid status transitions
+- Delete resource with dependencies
+- Invalid file types/sizes
+
+### 5. Verify Data
+- Check response structure
+- Verify auto-generated fields (slug, order_number, discount_price)
+- Verify calculated fields (status, isVip, totalSpent)
+
+### 6. Export/Import Collection
+- Export collection để share với team
+- Import collection để setup nhanh
+- Version control collection JSON
 
 ---
+
+## Postman Collection Template
+
+### Suggested Request Structure:
+
+```
+📁 Admin APIs - Shoe Shop
+├── 📁 1. Authentication
+│   └── POST Login
+│
+├── 📁 2. Dashboard & Analytics
+│   ├── GET Dashboard Stats
+│   └── GET Analytics
+│
+├── 📁 3. Products
+│   ├── GET Products List
+│   ├── POST Create Product
+│   ├── GET Product Detail
+│   ├── PUT Update Product
+│   ├── DELETE Product
+│   └── POST Upload Images
+│
+├── 📁 4. Brands
+│   ├── GET Brands List
+│   ├── POST Create Brand
+│   ├── GET Brand Detail
+│   ├── PUT Update Brand
+│   └── DELETE Brand
+│
+├── 📁 5. Categories
+│   ├── GET Categories List
+│   ├── POST Create Parent Category
+│   └── POST Create Child Category
+│
+├── 📁 6. Orders
+│   ├── GET Orders List
+│   ├── GET Order Detail
+│   └── PATCH Update Status
+│
+└── 📁 7. Customers
+    ├── GET Customers List
+    ├── GET Customer Detail
+    └── PATCH Update Status
+```
 
 ## Resources
 
 - **API Specification**: `docs/ADMIN_API_SPEC.md`
 - **Implementation Details**: `docs/ADMIN_API_IMPLEMENTATION.md`
-- **Base URL**: `http://localhost:8000/api/admin`
+- **Base URL**: `{{base_url}}/api/admin` (default: `http://localhost:8000/api/admin`)
 
 ---
 
-**Happy Testing! 🚀**
+## Quick Start Checklist
+
+- [ ] Tạo Environment với `base_url` và `token`
+- [ ] Tạo Collection "Admin APIs"
+- [ ] Setup Collection Authorization (Bearer Token)
+- [ ] Login và save token vào environment
+- [ ] Test GET Dashboard Stats để verify authentication
+- [ ] Tạo Brand → Save brand_id
+- [ ] Tạo Category → Save category_id
+- [ ] Tạo Product → Save product_id
+- [ ] Test upload images cho product
+- [ ] Test các APIs khác
+
+---
+
+**Happy Testing với Postman! 🚀**
 
