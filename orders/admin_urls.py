@@ -6,8 +6,13 @@ from .admin_views import (
     OrderListView, OrderDetailView, OrderStatusUpdateView,
     CustomerListView,
 )
+from .dashboard_views import DashboardStatsView, AnalyticsView
 
 urlpatterns = [
+    # Dashboard
+    path("dashboard/stats", DashboardStatsView.as_view(), name="admin_dashboard_stats"),
+    path("analytics", AnalyticsView.as_view(), name="admin_analytics"),
+    
     # Orders
     path("orders", OrderListView.as_view(), name="admin_orders"),
     path("orders/<str:order_id>", OrderDetailView.as_view(), name="admin_order_detail"),
