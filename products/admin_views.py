@@ -178,6 +178,326 @@ class BrandDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# TODO: Implement CategoryListView, CategoryDetailView, ProductListView, ProductDetailView
-# Following same pattern as BrandListView and BrandDetailView
+class CategoryListView(APIView):
+    """GET /api/admin/categories - List categories"""
+    @require_admin
+    def get(self, request):
+        # Get parent categories
+        parent_categories = ParentCategory.objects.all()
+        
+        result = []
+        for parent in parent_categories:
+            # Get child categories
+            children = ChildCategory.objects(parent=parent)
+            
+            result.append({
+                "id": str(parent.id),
+                "name": parent.name,
+                "slug": parent.slug,
+                "description": parent.description,
+                "image": parent.image,
+                "status": parent.status,
+                "type": "parent",
+                "productCount": Product.objects(category__in=children).count(),
+                "createdAt": parent.created_at.isoformat(),
+                "updatedAt": parent.updated_at.isoformat(),
+                "children": [
+                    {
+                        "id": str(child.id),
+                        "name": child.name,
+                        "slug": child.slug,
+                        "description": child.description,
+                        "image": child.image,
+                        "status": child.status,
+                        "productCount": Product.objects(category=child).count(),
+                        "createdAt": child.created_at.isoformat(),
+                        "updatedAt": child.updated_at.isoformat()
+                    }
+                    for child in children
+                ]
+            })
+        
+        return Response({
+            "data": result,
+            "pagination": {
+                "page": 1,
+                "limit": 50,
+                "total": len(result),
+                "totalPages": 1
+            }
+        })
+    
+    @require_admin
+    def post(self, request):
+        """POST /api/admin/categories - Create category"""
+        name = request.data.get('name')
+        category_type = request.data.get('type', 'child')  # 'parent' or 'child'
+        parent_id = request.data.get('parentId')
+        
+        if not name:
+            return Response(
+                {"error": {"code": "MISSING_FIELD", "message": "Name is required"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            if category_type == 'parent':
+                category = ParentCategory(
+                    name=name,
+                    slug=request.data.get('slug', ''),
+                    description=request.data.get('description', ''),
+                    status=request.data.get('status', 'active')
+                )
+                category.save()
+                
+                return Response({
+                    "id": str(category.id),
+                    "name": category.name,
+                    "slug": category.slug,
+                    "description": category.description,
+                    "image": category.image,
+                    "status": category.status,
+                    "type": "parent",
+                    "createdAt": category.created_at.isoformat(),
+                    "updatedAt": category.updated_at.isoformat()
+                }, status=status.HTTP_201_CREATED)
+            else:
+                # Child category
+                if not parent_id:
+                    return Response(
+                        {"error": {"code": "MISSING_FIELD", "message": "Parent ID is required for child category"}},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                parent = ParentCategory.objects.get(id=ObjectId(parent_id))
+                category = ChildCategory(
+                    name=name,
+                    slug=request.data.get('slug', ''),
+                    description=request.data.get('description', ''),
+                    parent=parent,
+                    status=request.data.get('status', 'active')
+                )
+                category.save()
+                
+                return Response({
+                    "id": str(category.id),
+                    "name": category.name,
+                    "slug": category.slug,
+                    "description": category.description,
+                    "image": category.image,
+                    "status": category.status,
+                    "type": "child",
+                    "parentId": str(parent.id),
+                    "createdAt": category.created_at.isoformat(),
+                    "updatedAt": category.updated_at.isoformat()
+                }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response(
+                {"error": {"code": "CREATE_FAILED", "message": str(e)}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class ProductListView(APIView):
+    """GET /api/admin/products - List products with filters"""
+    @require_admin
+    def get(self, request):
+        # TODO: Implement pagination, search, filters, sort
+        products = Product.objects.all().order_by('-created_at')[:20]
+        
+        result = []
+        for product in products:
+            result.append({
+                "id": str(product.id),
+                "name": product.name,
+                "slug": product.slug,
+                "description": product.description,
+                "category": {
+                    "id": str(product.category.id),
+                    "name": product.category.name,
+                    "slug": product.category.slug
+                } if product.category else None,
+                "brand": {
+                    "id": str(product.brand.id),
+                    "name": product.brand.name,
+                    "slug": product.brand.slug
+                } if product.brand else None,
+                "price": product.original_price,
+                "discountPrice": product.discount_price,
+                "stock": product.stock,
+                "sold": product.sold,
+                "images": product.images,
+                "status": product.status,
+                "specifications": product.specifications,
+                "createdAt": product.created_at.isoformat(),
+                "updatedAt": product.updated_at.isoformat()
+            })
+        
+        return Response({
+            "data": result,
+            "pagination": {
+                "page": 1,
+                "limit": 20,
+                "total": Product.objects.count(),
+                "totalPages": (Product.objects.count() + 19) // 20
+            }
+        })
+    
+    @require_admin
+    def post(self, request):
+        """POST /api/admin/products - Create product"""
+        name = request.data.get('name')
+        category_id = request.data.get('categoryId')
+        brand_id = request.data.get('brandId')
+        price = request.data.get('price')
+        
+        if not all([name, category_id, brand_id, price]):
+            return Response(
+                {"error": {"code": "MISSING_FIELD", 
+                          "message": "Name, categoryId, brandId, and price are required"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            category = ChildCategory.objects.get(id=ObjectId(category_id))
+            brand = Brand.objects.get(id=ObjectId(brand_id))
+            
+            product = Product(
+                name=name,
+                slug=request.data.get('slug', ''),
+                description=request.data.get('description', ''),
+                original_price=float(price),
+                discount=request.data.get('discount', 0),
+                stock=request.data.get('stock', 0),
+                brand=brand,
+                category=category,
+                status=request.data.get('status', 'active'),
+                specifications=request.data.get('specifications', {}),
+                tags=request.data.get('tags', [])
+            )
+            product.save()
+            
+            return Response({
+                "id": str(product.id),
+                "name": product.name,
+                "slug": product.slug,
+                "description": product.description,
+                "price": product.original_price,
+                "discountPrice": product.discount_price,
+                "stock": product.stock,
+                "status": product.status,
+                "createdAt": product.created_at.isoformat()
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response(
+                {"error": {"code": "CREATE_FAILED", "message": str(e)}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class ProductDetailView(APIView):
+    """Product detail operations"""
+    
+    @require_admin
+    def get(self, request, product_id):
+        """GET /api/admin/products/:id"""
+        try:
+            product = Product.objects.get(id=ObjectId(product_id))
+        except (InvalidId, Product.DoesNotExist):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Product not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        return Response({
+            "id": str(product.id),
+            "name": product.name,
+            "slug": product.slug,
+            "description": product.description,
+            "category": {
+                "id": str(product.category.id),
+                "name": product.category.name,
+                "slug": product.category.slug
+            } if product.category else None,
+            "brand": {
+                "id": str(product.brand.id),
+                "name": product.brand.name,
+                "slug": product.brand.slug
+            } if product.brand else None,
+            "price": product.original_price,
+            "discountPrice": product.discount_price,
+            "stock": product.stock,
+            "sold": product.sold,
+            "images": product.images,
+            "status": product.status,
+            "specifications": product.specifications,
+            "tags": product.tags,
+            "createdAt": product.created_at.isoformat(),
+            "updatedAt": product.updated_at.isoformat()
+        })
+    
+    @require_admin
+    def put(self, request, product_id):
+        """PUT /api/admin/products/:id"""
+        try:
+            product = Product.objects.get(id=ObjectId(product_id))
+        except (InvalidId, Product.DoesNotExist):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Product not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Update fields
+        if 'name' in request.data:
+            product.name = request.data['name']
+        if 'description' in request.data:
+            product.description = request.data['description']
+        if 'price' in request.data:
+            product.original_price = float(request.data['price'])
+        if 'discount' in request.data:
+            product.discount = request.data['discount']
+        if 'stock' in request.data:
+            product.stock = request.data['stock']
+        if 'status' in request.data:
+            product.status = request.data['status']
+        if 'categoryId' in request.data:
+            product.category = ChildCategory.objects.get(id=ObjectId(request.data['categoryId']))
+        if 'brandId' in request.data:
+            product.brand = Brand.objects.get(id=ObjectId(request.data['brandId']))
+        if 'specifications' in request.data:
+            product.specifications = request.data['specifications']
+        if 'tags' in request.data:
+            product.tags = request.data['tags']
+        
+        try:
+            product.save()
+            return Response({
+                "id": str(product.id),
+                "name": product.name,
+                "slug": product.slug,
+                "price": product.original_price,
+                "discountPrice": product.discount_price,
+                "stock": product.stock,
+                "status": product.status,
+                "updatedAt": product.updated_at.isoformat()
+            })
+        except Exception as e:
+            return Response(
+                {"error": {"code": "UPDATE_FAILED", "message": str(e)}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @require_admin
+    def delete(self, request, product_id):
+        """DELETE /api/admin/products/:id"""
+        try:
+            product = Product.objects.get(id=ObjectId(product_id))
+        except (InvalidId, Product.DoesNotExist):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Product not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        product.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
