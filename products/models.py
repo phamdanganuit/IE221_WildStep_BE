@@ -196,8 +196,8 @@ class Product(me.Document):
             "brand",
             "category",
             "status",
-            "created_at",
-            ("name", "text")  # Text index for search
+            "created_at"
+            # Note: Text index for full-text search can be created manually in MongoDB if needed
         ]
     }
     
