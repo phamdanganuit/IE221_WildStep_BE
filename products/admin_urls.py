@@ -4,7 +4,7 @@ Admin URLs for products management
 from django.urls import path
 from .admin_views import (
     BrandListView, BrandDetailView,
-    CategoryListView,
+    CategoryListView, CategoryDetailView,
     ProductListView, ProductDetailView, ProductImageUploadView,
 )
 
@@ -15,7 +15,7 @@ urlpatterns = [
     
     # Categories
     path("categories", CategoryListView.as_view(), name="admin_categories"),
-    # path("categories/<str:category_id>", CategoryDetailView.as_view(), name="admin_category_detail"),
+    path("categories/<str:category_id>", CategoryDetailView.as_view(), name="admin_category_detail"),
     
     # Products
     path("products", ProductListView.as_view(), name="admin_products"),

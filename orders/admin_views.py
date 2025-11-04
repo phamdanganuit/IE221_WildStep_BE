@@ -9,17 +9,95 @@ from .models import Order
 from users.models import User
 from bson import ObjectId
 from datetime import datetime, timedelta
+from mongoengine.queryset.visitor import Q
 
 
 class OrderListView(APIView):
     """GET /api/admin/orders - List orders"""
     @require_admin
     def get(self, request):
-        # TODO: Implement pagination, search, filters
-        orders = Order.objects.all().order_by('-created_at')[:20]
-        
+        # Query params
+        page = int(request.query_params.get("page", 1))
+        limit = int(request.query_params.get("limit", 20))
+        search = (request.query_params.get("search") or "").strip()
+        status_filter = (request.query_params.get("status") or "").strip().lower()
+        payment_status = (request.query_params.get("paymentStatus") or "").strip().lower()
+        start_date = (request.query_params.get("startDate") or "").strip()
+        end_date = (request.query_params.get("endDate") or "").strip()
+        sort = (request.query_params.get("sort") or "createdAt").strip()
+        order_dir = (request.query_params.get("order") or "desc").strip().lower()
+
+        # Build base query
+        q = Q()
+
+        # Filter by date range
+        if start_date:
+            try:
+                dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                q = q & Q(created_at__gte=dt)
+            except Exception:
+                pass
+        if end_date:
+            try:
+                dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                q = q & Q(created_at__lte=dt)
+            except Exception:
+                pass
+
+        if status_filter:
+            q = q & Q(status=status_filter)
+        if payment_status:
+            q = q & Q(payment_status=payment_status)
+
+        # Execute initial query
+        qs = Order.objects(q)
+
+        # Search by orderNumber or customer info
+        if search:
+            # First, filter by order number contains
+            candidate_orders = list(qs.filter(order_number__icontains=search))
+            # Then, search by customer name/email/phone
+            user_q = (
+                Q(email__icontains=search) |
+                Q(displayName__icontains=search) |
+                Q(username__icontains=search) |
+                Q(phone__icontains=search)
+            )
+            matched_users = list(User.objects(user_q))
+            if matched_users:
+                user_ids = {u.id for u in matched_users}
+                candidate_orders += list(qs.filter(user__in=list(user_ids)))
+            # Deduplicate
+            seen = set()
+            orders = []
+            for o in candidate_orders:
+                if o.id not in seen:
+                    seen.add(o.id)
+                    orders.append(o)
+            qs_list = orders
+        else:
+            qs_list = list(qs)
+
+        # Sorting
+        reverse = (order_dir != "asc")
+        if sort == "total":
+            qs_list.sort(key=lambda x: x.total_price or 0, reverse=reverse)
+        elif sort == "status":
+            qs_list.sort(key=lambda x: x.status or "", reverse=reverse)
+        elif sort == "paymentStatus":
+            qs_list.sort(key=lambda x: x.payment_status or "", reverse=reverse)
+        else:  # createdAt default
+            qs_list.sort(key=lambda x: x.created_at or datetime.min, reverse=reverse)
+
+        # Pagination
+        total = len(qs_list)
+        start = (page - 1) * limit
+        end = start + limit
+        page_items = qs_list[start:end]
+
+        # Build response
         result = []
-        for order in orders:
+        for order in page_items:
             result.append({
                 "id": str(order.id),
                 "orderNumber": order.order_number,
@@ -32,17 +110,19 @@ class OrderListView(APIView):
                 "total": order.total_price,
                 "status": order.status,
                 "paymentStatus": order.payment_status,
-                "orderDate": order.created_at.isoformat(),
+                "orderDate": order.created_at.isoformat() if order.created_at else None,
                 "completedDate": order.completed_date.isoformat() if order.completed_date else None
             })
-        
+
         return Response({
             "data": result,
             "pagination": {
-                "page": 1,
-                "limit": 20,
-                "total": Order.objects.count(),
-                "totalPages": (Order.objects.count() + 19) // 20
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "totalPages": (total + limit - 1) // limit,
+                "hasNext": end < total,
+                "hasPrev": start > 0
             }
         })
 
@@ -149,22 +229,37 @@ class CustomerListView(APIView):
     """GET /api/admin/customers - List customers with stats"""
     @require_admin
     def get(self, request):
-        # Get all users (exclude admins)
-        users = User.objects(role="user")[:20]
-        
-        result = []
-        for user in users:
-            # Calculate stats from orders
-            orders = Order.objects(user=user)
-            total_orders = orders.count()
-            
-            # Calculate isVip and status
+        # Query params
+        page = int(request.query_params.get("page", 1))
+        limit = int(request.query_params.get("limit", 20))
+        search = (request.query_params.get("search") or "").strip()
+        status_filter = (request.query_params.get("status") or "").strip().lower()  # active|inactive|vip|blocked
+        sort = (request.query_params.get("sort") or "").strip()  # name|totalOrders|totalSpent|joinDate
+        order_dir = (request.query_params.get("order") or "desc").strip().lower()  # asc|desc
+
+        # Base query: users only
+        query = Q(role="user")
+        if search:
+            query = query & (
+                Q(email__icontains=search) |
+                Q(username__icontains=search) |
+                Q(displayName__icontains=search) |
+                Q(phone__icontains=search)
+            )
+        if status_filter == "blocked":
+            query = query & Q(blocked=True)
+
+        users_qs = User.objects(query)
+
+        # Compute stats
+        results_with_stats = []
+        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        for user in users_qs:
+            orders_qs = Order.objects(user=user)
+            total_orders = orders_qs.count()
             is_vip = total_orders > 10
-            
-            # Check recent orders for status
-            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-            recent_order = orders.filter(created_at__gte=thirty_days_ago).order_by('-created_at').first()
-            
+            recent_order = orders_qs.filter(created_at__gte=thirty_days_ago).order_by('-created_at').first()
+
             if user.blocked:
                 customer_status = "blocked"
             elif is_vip:
@@ -173,13 +268,15 @@ class CustomerListView(APIView):
                 customer_status = "active"
             else:
                 customer_status = "inactive"
-            
-            # Calculate spending
-            completed_orders = orders.filter(status="completed")
-            total_spent = sum(order.total_price for order in completed_orders)
+
+            completed_orders = orders_qs.filter(status="completed")
+            total_spent = sum(o.total_price for o in completed_orders)
             avg_order_value = total_spent / total_orders if total_orders > 0 else 0
-            
-            result.append({
+
+            if status_filter and status_filter != "blocked" and customer_status != status_filter:
+                continue
+
+            results_with_stats.append({
                 "id": str(user.id),
                 "name": user.displayName or user.username or user.email,
                 "displayName": user.displayName,
@@ -194,14 +291,33 @@ class CustomerListView(APIView):
                 "isVip": is_vip,
                 "joinDate": user.created_at.isoformat()
             })
-        
+
+        # Sorting
+        reverse = (order_dir != "asc")
+        if sort == "name":
+            results_with_stats.sort(key=lambda x: (x["name"] or "").lower(), reverse=reverse)
+        elif sort == "totalOrders":
+            results_with_stats.sort(key=lambda x: x["totalOrders"], reverse=reverse)
+        elif sort == "totalSpent":
+            results_with_stats.sort(key=lambda x: x["totalSpent"], reverse=reverse)
+        elif sort == "joinDate":
+            results_with_stats.sort(key=lambda x: x["joinDate"] or "", reverse=reverse)
+
+        # Pagination
+        total = len(results_with_stats)
+        start = (page - 1) * limit
+        end = start + limit
+        paged = results_with_stats[start:end]
+
         return Response({
-            "data": result,
+            "data": paged,
             "pagination": {
-                "page": 1,
-                "limit": 20,
-                "total": User.objects(role="user").count(),
-                "totalPages": 1
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "totalPages": (total + limit - 1) // limit,
+                "hasNext": end < total,
+                "hasPrev": start > 0
             }
         })
 

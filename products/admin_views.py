@@ -398,6 +398,221 @@ class CategoryListView(APIView):
             )
 
 
+class CategoryDetailView(APIView):
+    """Admin category detail operations - supports both parent and child categories"""
+    
+    @require_admin
+    def get(self, request, category_id):
+        """GET /api/admin/categories/:id - Get category detail"""
+        try:
+            category_id_obj = ObjectId(category_id)
+        except InvalidId:
+            return Response(
+                {"error": {"code": "INVALID_ID", "message": "Invalid category ID"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Try to find as parent category first
+        try:
+            category = ParentCategory.objects.get(id=category_id_obj)
+            children = ChildCategory.objects(parent=category)
+            
+            return Response({
+                "id": str(category.id),
+                "name": category.name,
+                "slug": category.slug,
+                "description": category.description,
+                "image": category.image,
+                "status": category.status,
+                "type": "parent",
+                "productCount": Product.objects(category__in=children).count(),
+                "childrenCount": children.count(),
+                "createdAt": category.created_at.isoformat(),
+                "updatedAt": category.updated_at.isoformat(),
+                "children": [
+                    {
+                        "id": str(child.id),
+                        "name": child.name,
+                        "slug": child.slug,
+                        "description": child.description,
+                        "image": child.image,
+                        "status": child.status,
+                        "productCount": Product.objects(category=child).count(),
+                        "createdAt": child.created_at.isoformat(),
+                        "updatedAt": child.updated_at.isoformat()
+                    }
+                    for child in children
+                ]
+            })
+        except ParentCategory.DoesNotExist:
+            # Try as child category
+            try:
+                category = ChildCategory.objects.get(id=category_id_obj)
+                
+                return Response({
+                    "id": str(category.id),
+                    "name": category.name,
+                    "slug": category.slug,
+                    "description": category.description,
+                    "image": category.image,
+                    "status": category.status,
+                    "type": "child",
+                    "parentId": str(category.parent.id),
+                    "parentName": category.parent.name,
+                    "productCount": Product.objects(category=category).count(),
+                    "createdAt": category.created_at.isoformat(),
+                    "updatedAt": category.updated_at.isoformat()
+                })
+            except ChildCategory.DoesNotExist:
+                return Response(
+                    {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Category not found"}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+    
+    @require_admin
+    def put(self, request, category_id):
+        """PUT /api/admin/categories/:id - Update category"""
+        try:
+            category_id_obj = ObjectId(category_id)
+        except InvalidId:
+            return Response(
+                {"error": {"code": "INVALID_ID", "message": "Invalid category ID"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Try to find as parent category first
+        try:
+            category = ParentCategory.objects.get(id=category_id_obj)
+            category_type = "parent"
+        except ParentCategory.DoesNotExist:
+            # Try as child category
+            try:
+                category = ChildCategory.objects.get(id=category_id_obj)
+                category_type = "child"
+            except ChildCategory.DoesNotExist:
+                return Response(
+                    {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Category not found"}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        # Update fields
+        if 'name' in request.data:
+            category.name = request.data['name']
+        if 'slug' in request.data:
+            category.slug = request.data['slug']
+        if 'description' in request.data:
+            category.description = request.data['description']
+        if 'status' in request.data:
+            category.status = request.data['status']
+        if 'image' in request.data:
+            category.image = request.data['image']
+        
+        # For child category, can update parent
+        if category_type == 'child' and 'parentId' in request.data:
+            try:
+                new_parent = ParentCategory.objects.get(id=ObjectId(request.data['parentId']))
+                category.parent = new_parent
+            except (InvalidId, ParentCategory.DoesNotExist):
+                return Response(
+                    {"error": {"code": "INVALID_PARENT", "message": "Parent category not found"}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        try:
+            category.save()
+            
+            # Return response based on type
+            if category_type == "parent":
+                children = ChildCategory.objects(parent=category)
+                return Response({
+                    "id": str(category.id),
+                    "name": category.name,
+                    "slug": category.slug,
+                    "description": category.description,
+                    "image": category.image,
+                    "status": category.status,
+                    "type": "parent",
+                    "productCount": Product.objects(category__in=children).count(),
+                    "createdAt": category.created_at.isoformat(),
+                    "updatedAt": category.updated_at.isoformat()
+                })
+            else:
+                return Response({
+                    "id": str(category.id),
+                    "name": category.name,
+                    "slug": category.slug,
+                    "description": category.description,
+                    "image": category.image,
+                    "status": category.status,
+                    "type": "child",
+                    "parentId": str(category.parent.id),
+                    "createdAt": category.created_at.isoformat(),
+                    "updatedAt": category.updated_at.isoformat()
+                })
+        except Exception as e:
+            return Response(
+                {"error": {"code": "UPDATE_FAILED", "message": str(e)}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @require_admin
+    def delete(self, request, category_id):
+        """DELETE /api/admin/categories/:id - Delete category"""
+        try:
+            category_id_obj = ObjectId(category_id)
+        except InvalidId:
+            return Response(
+                {"error": {"code": "INVALID_ID", "message": "Invalid category ID"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Try to find as parent category first
+        try:
+            category = ParentCategory.objects.get(id=category_id_obj)
+            category_type = "parent"
+        except ParentCategory.DoesNotExist:
+            # Try as child category
+            try:
+                category = ChildCategory.objects.get(id=category_id_obj)
+                category_type = "child"
+            except ChildCategory.DoesNotExist:
+                return Response(
+                    {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Category not found"}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        # Validation: Cannot delete if category has products
+        if category_type == "parent":
+            # Check if parent has child categories
+            children = ChildCategory.objects(parent=category)
+            if children.count() > 0:
+                # Check if any child has products
+                total_products = Product.objects(category__in=children).count()
+                if total_products > 0:
+                    return Response(
+                        {"error": {"code": "CANNOT_DELETE", 
+                                  "message": f"Cannot delete parent category with {children.count()} child categories containing {total_products} products"}},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                # If no products, delete all children first
+                children.delete()
+            
+            category.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        else:
+            # Child category - check if it has products
+            product_count = Product.objects(category=category).count()
+            if product_count > 0:
+                return Response(
+                    {"error": {"code": "CANNOT_DELETE", 
+                              "message": f"Cannot delete category with {product_count} products"}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            category.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ProductListView(APIView):
     """GET /api/admin/products - List products with filters"""
     # Support both JSON and multipart/form-data (for file upload)
@@ -405,11 +620,55 @@ class ProductListView(APIView):
     
     @require_admin
     def get(self, request):
-        # TODO: Implement pagination, search, filters, sort
-        products = Product.objects.all().order_by('-created_at')[:20]
-        
+        # Query params
+        page = int(request.query_params.get('page', 1))
+        limit = int(request.query_params.get('limit', 20))
+        search = (request.query_params.get('search') or '').strip()
+        category_id = (request.query_params.get('category') or '').strip()
+        brand_id = (request.query_params.get('brand') or '').strip()
+        status_filter = (request.query_params.get('status') or '').strip()
+        sort = (request.query_params.get('sort') or 'createdAt').strip()
+        order_dir = (request.query_params.get('order') or 'desc').strip().lower()
+
+        qs = Product.objects
+        if search:
+            qs = qs(name__icontains=search)
+        if category_id:
+            try:
+                qs = qs(category=ObjectId(category_id))
+            except Exception:
+                pass
+        if brand_id:
+            try:
+                qs = qs(brand=ObjectId(brand_id))
+            except Exception:
+                pass
+        if status_filter:
+            qs = qs(status=status_filter)
+
+        products = list(qs.all())
+
+        reverse = (order_dir != 'asc')
+        if sort == 'name':
+            products.sort(key=lambda p: p.name or '', reverse=reverse)
+        elif sort == 'price':
+            products.sort(key=lambda p: p.original_price or 0, reverse=reverse)
+        elif sort == 'stock':
+            products.sort(key=lambda p: p.stock or 0, reverse=reverse)
+        elif sort == 'sold':
+            products.sort(key=lambda p: p.sold or 0, reverse=reverse)
+        elif sort == 'createdAt':
+            products.sort(key=lambda p: p.created_at or 0, reverse=reverse)
+        else:
+            products.sort(key=lambda p: p.created_at or 0, reverse=reverse)
+
+        total = len(products)
+        start = (page - 1) * limit
+        end = start + limit
+        page_items = products[start:end]
+
         result = []
-        for product in products:
+        for product in page_items:
             result.append({
                 "id": str(product.id),
                 "name": product.name,
@@ -439,10 +698,12 @@ class ProductListView(APIView):
         return Response({
             "data": result,
             "pagination": {
-                "page": 1,
-                "limit": 20,
-                "total": Product.objects.count(),
-                "totalPages": (Product.objects.count() + 19) // 20
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "totalPages": (total + limit - 1) // limit,
+                "hasNext": end < total,
+                "hasPrev": start > 0
             }
         })
     
