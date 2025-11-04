@@ -295,9 +295,9 @@ class UpdateAvatarView(APIView):
         if not file_obj:
             return Response({"detail": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-        allowed_types = ['image/jpeg', 'image/jpg', 'image/png']
-        if file_obj.content_type not in allowed_types:
-            return Response({"detail": "Invalid file type. Only JPEG and PNG are allowed"}, 
+        # Accept all image formats
+        if not file_obj.content_type or not file_obj.content_type.startswith('image/'):
+            return Response({"detail": "Invalid file type. Only image files are allowed"}, 
                           status=status.HTTP_400_BAD_REQUEST)
 
         if file_obj.size > 1 * 1024 * 1024:

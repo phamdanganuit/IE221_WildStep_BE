@@ -28,7 +28,6 @@ def upload_image_files(request_files, product_id=None):
         List of uploaded image URLs
     """
     uploaded_urls = []
-    allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
     max_size = 5 * 1024 * 1024  # 5MB
     
     # Get storage backend
@@ -45,9 +44,9 @@ def upload_image_files(request_files, product_id=None):
     file_prefix = str(product_id) if product_id else str(ObjectId())
     
     for file_obj in request_files:
-        # Validate file type
-        if file_obj.content_type not in allowed_types:
-            continue  # Skip invalid files
+        # Validate file type - accept all image formats
+        if not file_obj.content_type or not file_obj.content_type.startswith('image/'):
+            continue  # Skip non-image files
         
         # Validate file size
         if file_obj.size > max_size:
