@@ -82,6 +82,9 @@ class LoginView(APIView):
         if not user or not check_password(password, user.password_hash):
             return Response({"detail": "Invalid credentials"}, status=401)
 
+        if getattr(user, "blocked", False):
+            return Response({"detail": "Account is blocked"}, status=403)
+
         token = create_jwt({"sub": str(user.id), "email": user.email,"role": user.role})
         return Response({"access_token": token, "token_type": "Bearer"}, status=200)
 

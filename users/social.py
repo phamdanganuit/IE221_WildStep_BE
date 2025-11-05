@@ -60,6 +60,10 @@ def oauth_google(request):
             providers=[ProviderLink(provider="google", provider_user_id=google_id)]
         ).save()
 
+    # Chặn đăng nhập nếu tài khoản bị blocked
+    if getattr(user, "blocked", False):
+        return Response({"detail": "Account is blocked"}, status=status.HTTP_403_FORBIDDEN)
+
     token = create_jwt({"sub": str(user.id), "email": user.email, "role": user.role})
     return Response({"access_token": token, "token_type": "Bearer"}, status=status.HTTP_200_OK)
 
@@ -118,6 +122,10 @@ def oauth_facebook(request):
             providers=[ProviderLink(provider="facebook", provider_user_id=fb_id)]
         ).save()
 
-    # 6) Trả JWT
+    # 6) Chặn đăng nhập nếu tài khoản bị blocked
+    if getattr(user, "blocked", False):
+        return Response({"detail": "Account is blocked"}, status=status.HTTP_403_FORBIDDEN)
+
+    # 7) Trả JWT
     token = create_jwt({"sub": str(user.id), "email": user.email, "role": user.role})
     return Response({"access_token": token, "token_type": "Bearer"}, status=status.HTTP_200_OK)
