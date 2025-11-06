@@ -145,17 +145,50 @@ class BrandListView(APIView):
     @require_admin
     def post(self, request):
         """POST /api/admin/brands - Create brand"""
-        name = request.data.get('name')
+        # Parse multilingual name
+        payload_name = request.data.get('name')
+        name = None
+        if isinstance(payload_name, dict):
+            name = payload_name
+        else:
+            # Support dot-style fields: name.vi, name.en, name.ja
+            name_vi = request.data.get('name.vi')
+            name_en = request.data.get('name.en')
+            name_ja = request.data.get('name.ja')
+            multi = {}
+            if name_vi: multi['vi'] = name_vi
+            if name_en: multi['en'] = name_en
+            if name_ja: multi['ja'] = name_ja
+            if multi:
+                name = multi
+            else:
+                name = request.data.get('name')
+
         if not name:
             return Response(
                 {"error": {"code": "MISSING_FIELD", "message": "Name is required"}},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Parse multilingual description
+        payload_desc = request.data.get('description')
+        description = None
+        if isinstance(payload_desc, dict):
+            description = payload_desc
+        else:
+            desc_vi = request.data.get('description.vi')
+            desc_en = request.data.get('description.en')
+            desc_ja = request.data.get('description.ja')
+            multi_d = {}
+            if desc_vi: multi_d['vi'] = desc_vi
+            if desc_en: multi_d['en'] = desc_en
+            if desc_ja: multi_d['ja'] = desc_ja
+            description = multi_d if multi_d else payload_desc
+
         brand = Brand(
             name=name,
             slug=request.data.get('slug', ''),  # Auto-gen if empty
-            description=request.data.get('description', ''),
+            description=description,
             website=request.data.get('website', ''),
             country=request.data.get('country', ''),
             status=request.data.get('status', 'active')
@@ -221,12 +254,37 @@ class BrandDetailView(APIView):
             )
         
         # Update fields
-        if 'name' in request.data:
-            brand.name = request.data['name']
+        # Update multilingual name
+        if 'name' in request.data or 'name.vi' in request.data or 'name.en' in request.data or 'name.ja' in request.data:
+            payload_name = request.data.get('name')
+            if isinstance(payload_name, dict):
+                brand.name = payload_name
+            else:
+                # merge existing dict
+                current = brand.name if isinstance(brand.name, dict) else {}
+                if 'name.vi' in request.data: current['vi'] = request.data.get('name.vi')
+                if 'name.en' in request.data: current['en'] = request.data.get('name.en')
+                if 'name.ja' in request.data: current['ja'] = request.data.get('name.ja')
+                if payload_name and not current:
+                    brand.name = payload_name
+                elif current:
+                    brand.name = current
         if 'slug' in request.data:
             brand.slug = request.data['slug']
-        if 'description' in request.data:
-            brand.description = request.data['description']
+        # Update multilingual description
+        if 'description' in request.data or 'description.vi' in request.data or 'description.en' in request.data or 'description.ja' in request.data:
+            payload_desc = request.data.get('description')
+            if isinstance(payload_desc, dict):
+                brand.description = payload_desc
+            else:
+                current_d = brand.description if isinstance(brand.description, dict) else {}
+                if 'description.vi' in request.data: current_d['vi'] = request.data.get('description.vi')
+                if 'description.en' in request.data: current_d['en'] = request.data.get('description.en')
+                if 'description.ja' in request.data: current_d['ja'] = request.data.get('description.ja')
+                if payload_desc and not current_d:
+                    brand.description = payload_desc
+                elif current_d:
+                    brand.description = current_d
         if 'website' in request.data:
             brand.website = request.data['website']
         if 'country' in request.data:
@@ -329,7 +387,17 @@ class CategoryListView(APIView):
     @require_admin
     def post(self, request):
         """POST /api/admin/categories - Create category"""
-        name = request.data.get('name')
+        # Parse multilingual name/description
+        payload_name = request.data.get('name')
+        if isinstance(payload_name, dict):
+            name = payload_name
+        else:
+            n_vi = request.data.get('name.vi')
+            n_en = request.data.get('name.en')
+            n_ja = request.data.get('name.ja')
+            name = {k: v for k, v in [('vi', n_vi), ('en', n_en), ('ja', n_ja)] if v}
+            if not name:
+                name = request.data.get('name')
         category_type = request.data.get('type', 'child')  # 'parent' or 'child'
         parent_id = request.data.get('parentId')
         
@@ -344,7 +412,7 @@ class CategoryListView(APIView):
                 category = ParentCategory(
                     name=name,
                     slug=request.data.get('slug', ''),
-                    description=request.data.get('description', ''),
+                    description=(request.data.get('description') if isinstance(request.data.get('description'), dict) else {k: v for k, v in [('vi', request.data.get('description.vi')), ('en', request.data.get('description.en')), ('ja', request.data.get('description.ja'))] if v} or request.data.get('description', '')),
                     status=request.data.get('status', 'active')
                 )
                 category.save()
@@ -372,7 +440,7 @@ class CategoryListView(APIView):
                 category = ChildCategory(
                     name=name,
                     slug=request.data.get('slug', ''),
-                    description=request.data.get('description', ''),
+                    description=(request.data.get('description') if isinstance(request.data.get('description'), dict) else {k: v for k, v in [('vi', request.data.get('description.vi')), ('en', request.data.get('description.en')), ('ja', request.data.get('description.ja'))] if v} or request.data.get('description', '')),
                     parent=parent,
                     status=request.data.get('status', 'active')
                 )
@@ -495,12 +563,35 @@ class CategoryDetailView(APIView):
                 )
         
         # Update fields
-        if 'name' in request.data:
-            category.name = request.data['name']
+        # Multilingual name update
+        if 'name' in request.data or 'name.vi' in request.data or 'name.en' in request.data or 'name.ja' in request.data:
+            payload_name = request.data.get('name')
+            if isinstance(payload_name, dict):
+                category.name = payload_name
+            else:
+                cur = category.name if isinstance(category.name, dict) else {}
+                if 'name.vi' in request.data: cur['vi'] = request.data.get('name.vi')
+                if 'name.en' in request.data: cur['en'] = request.data.get('name.en')
+                if 'name.ja' in request.data: cur['ja'] = request.data.get('name.ja')
+                if payload_name and not cur:
+                    category.name = payload_name
+                elif cur:
+                    category.name = cur
         if 'slug' in request.data:
             category.slug = request.data['slug']
-        if 'description' in request.data:
-            category.description = request.data['description']
+        if 'description' in request.data or 'description.vi' in request.data or 'description.en' in request.data or 'description.ja' in request.data:
+            payload_desc = request.data.get('description')
+            if isinstance(payload_desc, dict):
+                category.description = payload_desc
+            else:
+                curd = category.description if isinstance(category.description, dict) else {}
+                if 'description.vi' in request.data: curd['vi'] = request.data.get('description.vi')
+                if 'description.en' in request.data: curd['en'] = request.data.get('description.en')
+                if 'description.ja' in request.data: curd['ja'] = request.data.get('description.ja')
+                if payload_desc and not curd:
+                    category.description = payload_desc
+                elif curd:
+                    category.description = curd
         if 'status' in request.data:
             category.status = request.data['status']
         if 'image' in request.data:
@@ -709,7 +800,14 @@ class ProductListView(APIView):
     @require_admin
     def post(self, request):
         """POST /api/admin/products - Create product with optional image upload"""
-        name = request.data.get('name')
+        # Multilingual fields parsing
+        raw_name = request.data.get('name')
+        if isinstance(raw_name, dict):
+            name = raw_name
+        else:
+            nv = request.data.get('name.vi'); ne = request.data.get('name.en'); nj = request.data.get('name.ja')
+            nm = {k: v for k, v in [('vi', nv), ('en', ne), ('ja', nj)] if v}
+            name = nm if nm else request.data.get('name')
         category_id = request.data.get('categoryId')
         brand_id = request.data.get('brandId')
         price = request.data.get('price')
@@ -748,10 +846,21 @@ class ProductListView(APIView):
             # Combine uploaded images and images from body
             all_images = uploaded_urls + images_from_body
             
+            # description and size_table multilingual
+            raw_desc = request.data.get('description')
+            if not isinstance(raw_desc, dict):
+                dv = request.data.get('description.vi'); de = request.data.get('description.en'); dj = request.data.get('description.ja')
+                raw_desc = ({k: v for k, v in [('vi', dv), ('en', de), ('ja', dj)] if v} or request.data.get('description', ''))
+
+            raw_size = request.data.get('size_table')
+            if not isinstance(raw_size, dict):
+                sv = request.data.get('size_table.vi'); se = request.data.get('size_table.en'); sj = request.data.get('size_table.ja')
+                raw_size = ({k: v for k, v in [('vi', sv), ('en', se), ('ja', sj)] if v} or request.data.get('size_table'))
+
             product = Product(
                 name=name,
                 slug=request.data.get('slug', ''),
-                description=request.data.get('description', ''),
+                description=raw_desc,
                 original_price=float(price),
                 discount=request.data.get('discount', 0),
                 stock=request.data.get('stock', 0),
@@ -760,7 +869,8 @@ class ProductListView(APIView):
                 status=request.data.get('status', 'active'),
                 specifications=request.data.get('specifications', {}),
                 tags=request.data.get('tags', []),
-                images=all_images
+                images=all_images,
+                size_table=raw_size,
             )
             product.save()
             
@@ -839,10 +949,45 @@ class ProductDetailView(APIView):
             )
         
         # Update fields
-        if 'name' in request.data:
-            product.name = request.data['name']
-        if 'description' in request.data:
-            product.description = request.data['description']
+        if 'name' in request.data or 'name.vi' in request.data or 'name.en' in request.data or 'name.ja' in request.data:
+            payload = request.data.get('name')
+            if isinstance(payload, dict):
+                product.name = payload
+            else:
+                cur = product.name if isinstance(product.name, dict) else {}
+                if 'name.vi' in request.data: cur['vi'] = request.data.get('name.vi')
+                if 'name.en' in request.data: cur['en'] = request.data.get('name.en')
+                if 'name.ja' in request.data: cur['ja'] = request.data.get('name.ja')
+                if payload and not cur:
+                    product.name = payload
+                elif cur:
+                    product.name = cur
+        if 'description' in request.data or 'description.vi' in request.data or 'description.en' in request.data or 'description.ja' in request.data:
+            payload = request.data.get('description')
+            if isinstance(payload, dict):
+                product.description = payload
+            else:
+                curd = product.description if isinstance(product.description, dict) else {}
+                if 'description.vi' in request.data: curd['vi'] = request.data.get('description.vi')
+                if 'description.en' in request.data: curd['en'] = request.data.get('description.en')
+                if 'description.ja' in request.data: curd['ja'] = request.data.get('description.ja')
+                if payload and not curd:
+                    product.description = payload
+                elif curd:
+                    product.description = curd
+        if 'size_table' in request.data or 'size_table.vi' in request.data or 'size_table.en' in request.data or 'size_table.ja' in request.data:
+            payload = request.data.get('size_table')
+            if isinstance(payload, dict):
+                product.size_table = payload
+            else:
+                curs = product.size_table if isinstance(product.size_table, dict) else {}
+                if 'size_table.vi' in request.data: curs['vi'] = request.data.get('size_table.vi')
+                if 'size_table.en' in request.data: curs['en'] = request.data.get('size_table.en')
+                if 'size_table.ja' in request.data: curs['ja'] = request.data.get('size_table.ja')
+                if payload and not curs:
+                    product.size_table = payload
+                elif curs:
+                    product.size_table = curs
         if 'price' in request.data:
             product.original_price = float(request.data['price'])
         if 'discount' in request.data:
@@ -1009,7 +1154,16 @@ class BannerListCreateView(APIView):
 
     @require_admin
     def post(self, request):
-        title = request.data.get('title', '')
+        # Multilingual title support
+        raw_title = request.data.get('title')
+        if isinstance(raw_title, dict):
+            title = raw_title
+        else:
+            t_vi = request.data.get('title.vi')
+            t_en = request.data.get('title.en')
+            t_ja = request.data.get('title.ja')
+            multi_t = {k: v for k, v in [('vi', t_vi), ('en', t_en), ('ja', t_ja)] if v}
+            title = multi_t if multi_t else (raw_title or '')
         link = request.data.get('link', '')
         order = int(request.data.get('order', 0) or 0)
         status_val = request.data.get('status', 'active')
@@ -1073,8 +1227,19 @@ class BannerDetailView(APIView):
         except (InvalidId, Banner.DoesNotExist):
             return Response({"error": {"code": "RESOURCE_NOT_FOUND", "message": "Banner not found"}}, status=status.HTTP_404_NOT_FOUND)
 
-        if 'title' in request.data:
-            b.title = request.data['title']
+        if 'title' in request.data or 'title.vi' in request.data or 'title.en' in request.data or 'title.ja' in request.data:
+            payload = request.data.get('title')
+            if isinstance(payload, dict):
+                b.title = payload
+            else:
+                cur = b.title if isinstance(b.title, dict) else {}
+                if 'title.vi' in request.data: cur['vi'] = request.data.get('title.vi')
+                if 'title.en' in request.data: cur['en'] = request.data.get('title.en')
+                if 'title.ja' in request.data: cur['ja'] = request.data.get('title.ja')
+                if payload and not cur:
+                    b.title = payload
+                elif cur:
+                    b.title = cur
         if 'link' in request.data:
             b.link = request.data['link']
         if 'order' in request.data:

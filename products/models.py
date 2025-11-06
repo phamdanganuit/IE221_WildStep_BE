@@ -8,9 +8,10 @@ from django.utils.text import slugify
 
 class Brand(me.Document):
     """Brand model - Thương hiệu sản phẩm"""
-    name = me.StringField(required=True, max_length=200)
+    # name, description hỗ trợ đa ngôn ngữ: string hoặc dict {vi,en,ja}
+    name = me.DynamicField(required=True)
     slug = me.StringField(required=True, unique=True, max_length=250)
-    description = me.StringField()
+    description = me.DynamicField()
     logo = me.StringField()  # URL to logo image
     website = me.StringField()
     country = me.StringField(max_length=100)
@@ -33,8 +34,19 @@ class Brand(me.Document):
     def save(self, *args, **kwargs):
         """Auto-generate slug from name if not provided"""
         if not self.slug:
-            # Generate slug from name: remove accents, lowercase, replace spaces
-            base_slug = slugify(self.name)
+            # Generate slug from name (support dict or string)
+            source_name = None
+            if isinstance(self.name, dict):
+                source_name = self.name.get('vi') or self.name.get('en') or self.name.get('ja')
+                if not source_name:
+                    # pick any first value
+                    try:
+                        source_name = next(iter(self.name.values()))
+                    except Exception:
+                        source_name = ''
+            else:
+                source_name = self.name or ''
+            base_slug = slugify(source_name)
             # Ensure unique slug
             counter = 1
             unique_slug = base_slug
@@ -52,9 +64,9 @@ class Brand(me.Document):
 
 class ParentCategory(me.Document):
     """Parent Category - Danh mục cha"""
-    name = me.StringField(required=True, max_length=200)
+    name = me.DynamicField(required=True)
     slug = me.StringField(required=True, unique=True, max_length=250)
-    description = me.StringField()
+    description = me.DynamicField()
     image = me.StringField()  # URL to category image
     status = me.StringField(
         choices=["active", "inactive"],
@@ -92,9 +104,9 @@ class ParentCategory(me.Document):
 
 class ChildCategory(me.Document):
     """Child Category - Danh mục con (subcategory)"""
-    name = me.StringField(required=True, max_length=200)
+    name = me.DynamicField(required=True)
     slug = me.StringField(required=True, unique=True, max_length=250)
-    description = me.StringField()
+    description = me.DynamicField()
     image = me.StringField()  # URL to category image
     parent = me.ReferenceField(ParentCategory, required=True)
     status = me.StringField(
@@ -148,9 +160,9 @@ class SizeVariant(me.EmbeddedDocument):
 class Product(me.Document):
     """Product model - Sản phẩm"""
     # Basic info
-    name = me.StringField(required=True, max_length=300)
+    name = me.DynamicField(required=True)
     slug = me.StringField(required=True, unique=True, max_length=350)
-    description = me.StringField()
+    description = me.DynamicField()
     
     # Pricing
     original_price = me.FloatField(required=True, min_value=0)  # originalPrice trong DB
@@ -174,7 +186,7 @@ class Product(me.Document):
     # Variants (embedded)
     colors = me.EmbeddedDocumentListField(ColorVariant, default=list)
     sizes = me.EmbeddedDocumentListField(SizeVariant, default=list)
-    size_table = me.StringField()  # Size chart/table info
+    size_table = me.DynamicField()  # Size chart/table info (can be localized)
     
     # Additional info from API spec
     status = me.StringField(
@@ -203,9 +215,19 @@ class Product(me.Document):
     
     def save(self, *args, **kwargs):
         """Auto-generate slug and calculate discount_price"""
-        # Generate slug from name if not provided
+        # Generate slug from name if not provided (support multilingual)
         if not self.slug:
-            base_slug = slugify(self.name)
+            source_name = None
+            if isinstance(self.name, dict):
+                source_name = self.name.get('vi') or self.name.get('en') or self.name.get('ja')
+                if not source_name:
+                    try:
+                        source_name = next(iter(self.name.values()))
+                    except Exception:
+                        source_name = ''
+            else:
+                source_name = self.name or ''
+            base_slug = slugify(source_name)
             counter = 1
             unique_slug = base_slug
             while Product.objects(slug=unique_slug, id__ne=self.id).first():
@@ -238,7 +260,7 @@ class Banner(me.Document):
     """Homepage banner"""
     image = me.StringField(required=True)
     link = me.StringField()
-    title = me.StringField()
+    title = me.DynamicField()
     order = me.IntField(default=0)
     status = me.StringField(choices=["active", "inactive"], default="active")
     created_at = me.DateTimeField(default=datetime.utcnow)
@@ -249,3 +271,34 @@ class Banner(me.Document):
     def save(self, *args, **kwargs):
         self.updated_at = datetime.utcnow()
         return super(Banner, self).save(*args, **kwargs)
+
+
+class HeroContent(me.Document):
+    """Hero section content (singleton-ish)"""
+    headline = me.StringField(required=True)
+    subtext = me.StringField()
+    cta_text = me.StringField()
+    cta_url = me.StringField()
+    image = me.StringField()  # URL
+    status = me.StringField(choices=["active", "inactive"], default="active")
+    created_at = me.DateTimeField(default=datetime.utcnow)
+    updated_at = me.DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "hero_content", "indexes": ["status", "-created_at"]}
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.utcnow()
+        return super(HeroContent, self).save(*args, **kwargs)
+
+
+class CustomerReview(me.Document):
+    """Customer reviews for public display"""
+    author_name = me.StringField(required=True)
+    author_avatar = me.StringField()
+    rating = me.IntField(min_value=1, max_value=5, default=5)
+    content = me.StringField(required=True)
+    placement = me.StringField(default="home")  # e.g., home
+    status = me.StringField(choices=["active", "inactive"], default="active")
+    created_at = me.DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "customer_reviews", "indexes": ["placement", "status", "-created_at"]}
