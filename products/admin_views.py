@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from users.auth import require_admin
-from .models import Brand, ParentCategory, ChildCategory, Product
+from .models import Brand, ParentCategory, ChildCategory, Product, Banner
 from bson import ObjectId
 from bson.errors import InvalidId
 from django.core.files.storage import default_storage
@@ -946,3 +946,190 @@ class ProductImageUploadView(APIView):
             "images": product.images
         }, status=status.HTTP_200_OK)
 
+
+class BrandLogoUploadView(APIView):
+    """POST /api/admin/brands/:id/logo - Upload brand logo"""
+    parser_classes = [MultiPartParser, FormParser]
+
+    @require_admin
+    def post(self, request, brand_id):
+        try:
+            brand = Brand.objects.get(id=ObjectId(brand_id))
+        except (InvalidId, Brand.DoesNotExist):
+            return Response(
+                {"error": {"code": "RESOURCE_NOT_FOUND", "message": "Brand not found"}},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        files = request.FILES.getlist('image') or request.FILES.getlist('logo') or request.FILES.getlist('file')
+        if not files:
+            # Accept single file under 'image'/'logo' as well
+            single = request.FILES.get('image') or request.FILES.get('logo') or request.FILES.get('file')
+            files = [single] if single else []
+
+        if not files:
+            return Response(
+                {"error": {"code": "MISSING_FIELD", "message": "No logo image provided"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        uploaded = upload_image_files(files, product_id=brand_id)
+        if not uploaded:
+            return Response(
+                {"error": {"code": "UPLOAD_FAILED", "message": "Upload failed"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        brand.logo = uploaded[0]
+        brand.save()
+        return Response({"id": str(brand.id), "logo": brand.logo}, status=status.HTTP_200_OK)
+
+
+class BannerListCreateView(APIView):
+    """GET/POST /api/admin/banners - List and create banners"""
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    @require_admin
+    def get(self, request):
+        banners = Banner.objects.order_by('order')
+        data = [
+            {
+                "id": str(b.id),
+                "image": b.image,
+                "link": b.link,
+                "title": b.title,
+                "order": b.order,
+                "status": b.status,
+                "createdAt": b.created_at.isoformat(),
+                "updatedAt": b.updated_at.isoformat(),
+            }
+            for b in banners
+        ]
+        return Response({"data": data})
+
+    @require_admin
+    def post(self, request):
+        title = request.data.get('title', '')
+        link = request.data.get('link', '')
+        order = int(request.data.get('order', 0) or 0)
+        status_val = request.data.get('status', 'active')
+
+        # Accept image from URL (JSON) only if it's a string; otherwise, expect file upload
+        image_url = request.data.get('image')
+        if not isinstance(image_url, str):
+            image_url = None
+
+        if not image_url and request.FILES:
+            files = request.FILES.getlist('image') or request.FILES.getlist('file')
+            if not files:
+                single = request.FILES.get('image') or request.FILES.get('file')
+                files = [single] if single else []
+            uploaded = upload_image_files(files, product_id=None) if files else []
+            image_url = uploaded[0] if uploaded else None
+
+        if not image_url:
+            return Response(
+                {"error": {"code": "MISSING_FIELD", "message": "image is required"}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        banner = Banner(image=image_url, link=link, title=title, order=order, status=status_val)
+        banner.save()
+        return Response({
+            "id": str(banner.id),
+            "image": banner.image,
+            "link": banner.link,
+            "title": banner.title,
+            "order": banner.order,
+            "status": banner.status,
+            "createdAt": banner.created_at.isoformat(),
+        }, status=status.HTTP_201_CREATED)
+
+
+class BannerDetailView(APIView):
+    """GET/PUT/DELETE /api/admin/banners/:id"""
+
+    @require_admin
+    def get(self, request, banner_id):
+        try:
+            b = Banner.objects.get(id=ObjectId(banner_id))
+        except (InvalidId, Banner.DoesNotExist):
+            return Response({"error": {"code": "RESOURCE_NOT_FOUND", "message": "Banner not found"}}, status=status.HTTP_404_NOT_FOUND)
+        return Response({
+            "id": str(b.id),
+            "image": b.image,
+            "link": b.link,
+            "title": b.title,
+            "order": b.order,
+            "status": b.status,
+            "createdAt": b.created_at.isoformat(),
+            "updatedAt": b.updated_at.isoformat(),
+        })
+
+    @require_admin
+    def put(self, request, banner_id):
+        try:
+            b = Banner.objects.get(id=ObjectId(banner_id))
+        except (InvalidId, Banner.DoesNotExist):
+            return Response({"error": {"code": "RESOURCE_NOT_FOUND", "message": "Banner not found"}}, status=status.HTTP_404_NOT_FOUND)
+
+        if 'title' in request.data:
+            b.title = request.data['title']
+        if 'link' in request.data:
+            b.link = request.data['link']
+        if 'order' in request.data:
+            try:
+                b.order = int(request.data['order'])
+            except Exception:
+                pass
+        if 'status' in request.data:
+            b.status = request.data['status']
+        if 'image' in request.data and isinstance(request.data['image'], str) and request.data['image']:
+            # Only accept direct URL via JSON; file uploads must use the /image endpoint
+            b.image = request.data['image']
+        b.save()
+        return Response({
+            "id": str(b.id),
+            "image": b.image,
+            "link": b.link,
+            "title": b.title,
+            "order": b.order,
+            "status": b.status,
+            "updatedAt": b.updated_at.isoformat(),
+        })
+
+    @require_admin
+    def delete(self, request, banner_id):
+        try:
+            b = Banner.objects.get(id=ObjectId(banner_id))
+        except (InvalidId, Banner.DoesNotExist):
+            return Response({"error": {"code": "RESOURCE_NOT_FOUND", "message": "Banner not found"}}, status=status.HTTP_404_NOT_FOUND)
+        b.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class BannerImageUploadView(APIView):
+    """POST /api/admin/banners/:id/image - Upload banner image"""
+    parser_classes = [MultiPartParser, FormParser]
+
+    @require_admin
+    def post(self, request, banner_id):
+        try:
+            b = Banner.objects.get(id=ObjectId(banner_id))
+        except (InvalidId, Banner.DoesNotExist):
+            return Response({"error": {"code": "RESOURCE_NOT_FOUND", "message": "Banner not found"}}, status=status.HTTP_404_NOT_FOUND)
+
+        files = request.FILES.getlist('image') or request.FILES.getlist('file')
+        if not files:
+            single = request.FILES.get('image') or request.FILES.get('file')
+            files = [single] if single else []
+        if not files:
+            return Response({"error": {"code": "MISSING_FIELD", "message": "No image provided"}}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploaded = upload_image_files(files, product_id=banner_id)
+        if not uploaded:
+            return Response({"error": {"code": "UPLOAD_FAILED", "message": "Upload failed"}}, status=status.HTTP_400_BAD_REQUEST)
+
+        b.image = uploaded[0]
+        b.save()
+        return Response({"id": str(b.id), "image": b.image}, status=status.HTTP_200_OK)

@@ -232,3 +232,20 @@ class Product(me.Document):
     
     def __str__(self):
         return self.name
+
+
+class Banner(me.Document):
+    """Homepage banner"""
+    image = me.StringField(required=True)
+    link = me.StringField()
+    title = me.StringField()
+    order = me.IntField(default=0)
+    status = me.StringField(choices=["active", "inactive"], default="active")
+    created_at = me.DateTimeField(default=datetime.utcnow)
+    updated_at = me.DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "banners", "indexes": ["status", "order"]}
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.utcnow()
+        return super(Banner, self).save(*args, **kwargs)
