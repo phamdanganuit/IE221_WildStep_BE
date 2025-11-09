@@ -910,6 +910,37 @@ class ProductListView(APIView):
                 weight=parse_multilingual_field('weight'),
                 size=parse_multilingual_field('size'),
             )
+            
+            # Handle colors
+            if 'colors' in request.data:
+                from .models import ColorVariant
+                colors_data = request.data.get('colors', [])
+                if isinstance(colors_data, list):
+                    colors_list = []
+                    for c in colors_data:
+                        if isinstance(c, dict):
+                            colors_list.append(ColorVariant(
+                                color_name=c.get('color_name'),
+                                hex_color=c.get('hex_color'),
+                                image=c.get('image'),
+                                tags=c.get('tags', [])
+                            ))
+                    product.colors = colors_list
+            
+            # Handle sizes
+            if 'sizes' in request.data:
+                from .models import SizeVariant
+                sizes_data = request.data.get('sizes', [])
+                if isinstance(sizes_data, list):
+                    sizes_list = []
+                    for s in sizes_data:
+                        if isinstance(s, dict):
+                            sizes_list.append(SizeVariant(
+                                size_name=s.get('size_name'),
+                                tags=s.get('tags', [])
+                            ))
+                    product.sizes = sizes_list
+            
             product.save()
             
             # Note: Files are uploaded with temp ID in filename, but URLs are already generated correctly

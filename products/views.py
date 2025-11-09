@@ -4,6 +4,10 @@ from .models import Banner, Brand, Product, ParentCategory, ChildCategory, Custo
 from rest_framework import status
 import re
 import unicodedata
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _pick_lang(value, lang: str, default_lang: str = 'vi'):
@@ -212,70 +216,594 @@ class PublicBrandListView(APIView):
 
 
 class PublicProductsListView(APIView):
-    """GET /api/products with sort and optional category filter"""
+    """GET /api/products - Full featured product list with filters, search, and sorting"""
     authentication_classes = []
     permission_classes = []
 
     def get(self, request):
-        lang = (request.query_params.get('lang') or 'vi').strip() or 'vi'
-        sort = (request.query_params.get('sort') or '').strip()
-        page = int(request.query_params.get('page') or 1)
-        page_size = int(request.query_params.get('page_size') or 12)
-        category_slug = (request.query_params.get('category_slug') or '').strip()
+        try:
+            # Parse query parameters
+            lang = (request.query_params.get('lang') or 'vi').strip() or 'vi'
+            sort = (request.query_params.get('sort') or 'popular').strip()
+            search = (request.query_params.get('search') or '').strip()
+            brand = (request.query_params.get('brand') or '').strip()
+            gender = (request.query_params.get('gender') or '').strip()
+            color = (request.query_params.get('color') or '').strip()
+            size = (request.query_params.get('size') or '').strip()
+            price_from = request.query_params.get('priceFrom')
+            price_to = request.query_params.get('priceTo')
+            category = (request.query_params.get('category') or '').strip()
+            
+            # Pagination parameters
+            try:
+                page = max(1, int(request.query_params.get('page') or 1))
+            except ValueError:
+                page = 1
+            
+            try:
+                page_size = int(request.query_params.get('page_size') or 12)
+                if page_size < 1:
+                    page_size = 12
+                elif page_size > 100:
+                    return Response(
+                        {
+                            "error": {
+                                "code": "INVALID_PARAMS",
+                                "message": "page_size must be between 1 and 100"
+                            }
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except ValueError:
+                page_size = 12
 
-        qs = Product.objects(status="active")
+            # Start with active products
+            qs = Product.objects(status="active")
 
-        # Category filter by child slug; if not found, try parent and include its children
-        if category_slug:
-            child = ChildCategory.objects(slug=category_slug).first()
-            if child:
-                qs = qs(category=child)
+            # Apply search filter
+            if search:
+                # Use text search function
+                search_results = _text_search(search, lang)
+                search_ids = [str(p.id) for p in search_results]
+                if search_ids:
+                    qs = qs(id__in=search_ids)
+                else:
+                    # No results found
+                    return Response({
+                        "data": [],
+                        "pagination": {
+                            "page": page,
+                            "page_size": page_size,
+                            "total": 0,
+                            "total_pages": 0
+                        },
+                        "filters": self._get_empty_filters()
+                    })
+
+            # Apply brand filter
+            if brand:
+                brand_names = [b.strip() for b in brand.split(',') if b.strip()]
+                if brand_names:
+                    all_brands = list(Brand.objects(status="active"))
+                    matching_brands = []
+                    for br in all_brands:
+                        brand_name = _pick_lang(br.name, lang)
+                        if brand_name and brand_name in brand_names:
+                            matching_brands.append(br)
+                    if matching_brands:
+                        qs = qs(brand__in=matching_brands)
+                    else:
+                        # No matching brands
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+
+            # Apply gender filter
+            if gender:
+                gender_values = [g.strip() for g in gender.split(',') if g.strip()]
+                if gender_values:
+                    # Normalize gender values
+                    gender_map = {
+                        'Nam': ['Nam', 'Male', '男性'],
+                        'Nữ': ['Nữ', 'Female', '女性'],
+                        'Unisex': ['Unisex', 'Unisex', 'ユニセックス']
+                    }
+                    matching_genders = []
+                    for gv in gender_values:
+                        for key, values in gender_map.items():
+                            if gv in values or any(gv.lower() == v.lower() for v in values):
+                                matching_genders.extend(values)
+                                break
+                    
+                    # Filter products by gender
+                    all_products = list(qs)
+                    filtered_products = []
+                    for p in all_products:
+                        product_gender = _pick_lang(p.gender, lang) if p.gender else None
+                        if product_gender:
+                            product_gender_normalized = _normalize_vietnamese(product_gender.lower())
+                            for mg in matching_genders:
+                                if _normalize_vietnamese(mg.lower()) in product_gender_normalized or product_gender_normalized in _normalize_vietnamese(mg.lower()):
+                                    filtered_products.append(p)
+                                    break
+                    if filtered_products:
+                        product_ids = [str(p.id) for p in filtered_products]
+                        qs = qs(id__in=product_ids)
+                    else:
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+
+            # Apply color filter
+            if color:
+                color_names = [c.strip() for c in color.split(',') if c.strip()]
+                if color_names:
+                    all_products = list(qs)
+                    filtered_products = []
+                    for p in all_products:
+                        if p.colors:
+                            for color_variant in p.colors:
+                                color_name = _pick_lang(color_variant.color_name, lang)
+                                if color_name:
+                                    color_name_normalized = _normalize_vietnamese(color_name.lower())
+                                    for cn in color_names:
+                                        if _normalize_vietnamese(cn.lower()) in color_name_normalized or color_name_normalized in _normalize_vietnamese(cn.lower()):
+                                            filtered_products.append(p)
+                                            break
+                                    if p in filtered_products:
+                                        break
+                    if filtered_products:
+                        product_ids = [str(p.id) for p in filtered_products]
+                        qs = qs(id__in=product_ids)
+                    else:
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+
+            # Apply size filter
+            if size:
+                size_values = [s.strip() for s in size.split(',') if s.strip()]
+                if size_values:
+                    all_products = list(qs)
+                    filtered_products = []
+                    for p in all_products:
+                        if p.sizes:
+                            for size_variant in p.sizes:
+                                size_name = _pick_lang(size_variant.size_name, lang)
+                                if size_name:
+                                    size_name_normalized = _normalize_vietnamese(size_name.lower())
+                                    for sv in size_values:
+                                        if _normalize_vietnamese(sv.lower()) in size_name_normalized or size_name_normalized in _normalize_vietnamese(sv.lower()):
+                                            filtered_products.append(p)
+                                            break
+                                    if p in filtered_products:
+                                        break
+                    if filtered_products:
+                        product_ids = [str(p.id) for p in filtered_products]
+                        qs = qs(id__in=product_ids)
+                    else:
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+
+            # Apply price filters
+            if price_from:
+                try:
+                    price_from_val = float(price_from)
+                    qs = qs(original_price__gte=price_from_val)
+                except (ValueError, TypeError):
+                    pass
+
+            if price_to:
+                try:
+                    price_to_val = float(price_to)
+                    qs = qs(original_price__lte=price_to_val)
+                except (ValueError, TypeError):
+                    pass
+
+            # Apply special category filter
+            if category:
+                if category == 'Sản-phẩm-mới' or category == 'San-pham-moi':
+                    # New products (created in last 30 days)
+                    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+                    qs = qs(created_at__gte=thirty_days_ago)
+                elif category == 'Giảm-giá' or category == 'Giam-gia':
+                    # Products with discount
+                    qs = qs(discount__gt=0)
+                elif category == 'Phụ-kiện' or category == 'Phu-kien':
+                    # Accessories - filter by category name containing "phụ kiện" or "accessory"
+                    all_products = list(qs)
+                    filtered_products = []
+                    for p in all_products:
+                        if p.category:
+                            cat_name = _pick_lang(p.category.name, lang)
+                            if cat_name:
+                                cat_name_lower = _normalize_vietnamese(cat_name.lower())
+                                if 'phu kien' in cat_name_lower or 'accessory' in cat_name_lower or 'phụ kiện' in cat_name_lower:
+                                    filtered_products.append(p)
+                    if filtered_products:
+                        product_ids = [str(p.id) for p in filtered_products]
+                        qs = qs(id__in=product_ids)
+                    else:
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+
+            # Get all products and ensure reference fields are loaded
+            products = list(qs)
+            
+            # Reload reference fields to avoid lazy loading issues
+            for product in products:
+                try:
+                    if product.brand:
+                        product.brand.reload()
+                    if product.category:
+                        product.category.reload()
+                        if product.category.parent:
+                            product.category.parent.reload()
+                except Exception:
+                    # If reload fails, continue - fields may already be loaded
+                    pass
+
+            # Apply sorting
+            if sort == 'popular':
+                products.sort(key=lambda p: ((p.sold or 0), (p.rate or 0)), reverse=True)
+            elif sort == 'newest':
+                products.sort(key=lambda p: p.created_at or datetime.min, reverse=True)
+            elif sort == 'oldest':
+                products.sort(key=lambda p: p.created_at or datetime.max)
+            elif sort == 'price_asc':
+                products.sort(key=lambda p: p.original_price or 0)
+            elif sort == 'price_desc':
+                products.sort(key=lambda p: p.original_price or 0, reverse=True)
+            elif sort == 'rating_desc':
+                products.sort(key=lambda p: p.rate or 0, reverse=True)
+            elif sort == 'name_asc':
+                products.sort(key=lambda p: _pick_lang(p.name, lang) or '')
+            elif sort == 'name_desc':
+                products.sort(key=lambda p: _pick_lang(p.name, lang) or '', reverse=True)
             else:
-                parent = ParentCategory.objects(slug=category_slug).first()
-                if parent:
-                    children = list(ChildCategory.objects(parent=parent))
-                    qs = qs(category__in=children)
+                # Default to popular
+                products.sort(key=lambda p: ((p.sold or 0), (p.rate or 0)), reverse=True)
 
-        products = list(qs)
+            # Calculate filters from filtered products (before pagination)
+            filters = self._calculate_filters(products, lang)
 
-        # Sorting strategies
-        if sort == 'popular':
-            products.sort(key=lambda p: ((p.sold or 0), (p.rate or 0)), reverse=True)
-        elif sort == 'best_sellers':
-            products.sort(key=lambda p: (p.sold or 0), reverse=True)
-        else:
-            products.sort(key=lambda p: p.created_at or 0, reverse=True)
+            # Pagination
+            total = len(products)
+            total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+            start = max((page - 1) * page_size, 0)
+            end = start + page_size
+            page_items = products[start:end]
 
-        total = len(products)
-        start = max((page - 1) * page_size, 0)
-        end = start + page_size
-        page_items = products[start:end]
+            # Build response data
+            data = []
+            for p in page_items:
+                # Get first color's name and hex if available
+                color_name = None
+                color_hex = None
+                if p.colors and len(p.colors) > 0:
+                    first_color = p.colors[0]
+                    if first_color:
+                        # Get color name (multilingual)
+                        color_name_raw = getattr(first_color, 'color_name', None)
+                        if color_name_raw:
+                            color_name = _pick_lang(color_name_raw, lang)
+                        # Get hex color
+                        color_hex = getattr(first_color, 'hex_color', None)
 
-        data = [
-            {
-                "id": str(p.id),
-                "name": _pick_lang(p.name, lang),
-                "slug": p.slug,
-                "price": p.original_price,
-                "discountPrice": p.discount_price,
-                "rate": p.rate,
-                "sold": p.sold,
-                "images": p.images,
-                "brand": {"id": str(p.brand.id), "name": _pick_lang(p.brand.name, lang), "slug": p.brand.slug} if p.brand else None,
-                "category": {"id": str(p.category.id), "name": _pick_lang(p.category.name, lang), "slug": p.category.slug} if p.category else None,
+                # Build brand info
+                brand_info = None
+                if p.brand:
+                    brand_info = {
+                        "_id": str(p.brand.id),
+                        "name": _pick_lang(p.brand.name, lang)
+                    }
+
+                # Build category info with parent
+                category_info = None
+                if p.category:
+                    category_info = {
+                        "_id": str(p.category.id),
+                        "name": _pick_lang(p.category.name, lang)
+                    }
+                    # Add parent category if exists
+                    if p.category.parent:
+                        category_info["parentId"] = {
+                            "_id": str(p.category.parent.id),
+                            "name": _pick_lang(p.category.parent.name, lang)
+                        }
+
+                # Calculate discount percentage
+                discount_pct = int(p.discount) if p.discount else 0
+
+                product_data = {
+                    "_id": str(p.id),
+                    "name": _pick_lang(p.name, lang),
+                    "originalPrice": int(p.original_price) if p.original_price else 0,
+                    "discount": discount_pct,
+                    "sold": p.sold or 0,
+                    "rate": p.rate or 0,
+                    "stock": p.stock or 0,
+                    "images": p.images or [],
+                    "brandId": brand_info,
+                    "categoryId": category_info,
+                    "createdAt": p.created_at.isoformat() if p.created_at else None,
+                }
+
+                # Add color and colorHex if available
+                if color_name:
+                    product_data["color"] = color_name
+                if color_hex:
+                    product_data["colorHex"] = color_hex
+
+                data.append(product_data)
+
+            return Response({
+                "data": data,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": total_pages
+                },
+                "filters": filters
+            })
+
+        except Exception as e:
+            logger.error(f"Error in PublicProductsListView: {str(e)}", exc_info=True)
+            return Response(
+                {
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "Có lỗi xảy ra khi tải sản phẩm"
+                    }
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _get_empty_filters(self):
+        """Return empty filters structure"""
+        return {
+            "availableBrands": [],
+            "availableColors": [],
+            "availableSizes": [],
+            "availableGenders": [],
+            "priceRange": {
+                "min": 0,
+                "max": 0
             }
-            for p in page_items
-        ]
+        }
 
-        return Response({
-            "data": data,
-            "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": (total + page_size - 1) // page_size,
+    def _calculate_filters(self, products, lang):
+        """
+        Calculate available filters from filtered products.
+        Filters are based on the filtered results, not all products.
+        """
+        try:
+            available_brands = {}
+            available_colors = {}
+            available_sizes = {}
+            available_genders = {}
+            prices = []
+            
+            # Debug: Count products with colors/sizes
+            products_with_colors = 0
+            products_with_sizes = 0
+            total_colors = 0
+            total_sizes = 0
+
+            for product in products:
+                try:
+                    # Debug: Count products with colors/sizes
+                    if product.colors and len(product.colors) > 0:
+                        products_with_colors += 1
+                        total_colors += len(product.colors)
+                    if product.sizes and len(product.sizes) > 0:
+                        products_with_sizes += 1
+                        total_sizes += len(product.sizes)
+                    
+                    # Count brands
+                    if product.brand:
+                        try:
+                            # Ensure brand is loaded
+                            if hasattr(product.brand, 'name'):
+                                brand_name = _pick_lang(product.brand.name, lang)
+                                if brand_name:
+                                    if brand_name not in available_brands:
+                                        available_brands[brand_name] = 0
+                                    available_brands[brand_name] += 1
+                        except Exception as e:
+                            logger.warning(f"Error processing brand for product {product.id}: {str(e)}")
+                            continue
+
+                    # Count colors from colors array
+                    if product.colors and len(product.colors) > 0:
+                        for color_variant in product.colors:
+                            try:
+                                if not color_variant:
+                                    continue
+                                
+                                # Access color_name directly (it's a DynamicField)
+                                # Try both direct access and getattr
+                                color_name_raw = None
+                                if hasattr(color_variant, 'color_name'):
+                                    color_name_raw = color_variant.color_name
+                                else:
+                                    color_name_raw = getattr(color_variant, 'color_name', None)
+                                
+                                if not color_name_raw:
+                                    logger.debug(f"Color variant has no color_name: {color_variant}")
+                                    continue
+                                
+                                color_name = _pick_lang(color_name_raw, lang)
+                                if not color_name:
+                                    logger.debug(f"Color name is empty after _pick_lang: {color_name_raw}")
+                                    continue
+                                
+                                # Use color name as key, store hex and count
+                                if color_name not in available_colors:
+                                    hex_color = None
+                                    if hasattr(color_variant, 'hex_color'):
+                                        hex_color = color_variant.hex_color
+                                    else:
+                                        hex_color = getattr(color_variant, 'hex_color', None)
+                                    
+                                    available_colors[color_name] = {
+                                        "hex": hex_color if hex_color else None,
+                                        "count": 0
+                                    }
+                                available_colors[color_name]["count"] += 1
+                            except Exception as e:
+                                logger.warning(f"Error processing color variant for product {product.id}: {str(e)}", exc_info=True)
+                                # Continue to next color variant, not skip entire product
+                                continue
+
+                    # Count sizes from sizes array
+                    if product.sizes and len(product.sizes) > 0:
+                        for size_variant in product.sizes:
+                            try:
+                                if not size_variant:
+                                    continue
+                                
+                                # Access size_name directly (it's a DynamicField)
+                                # Try both direct access and getattr
+                                size_name_raw = None
+                                if hasattr(size_variant, 'size_name'):
+                                    size_name_raw = size_variant.size_name
+                                else:
+                                    size_name_raw = getattr(size_variant, 'size_name', None)
+                                
+                                if not size_name_raw:
+                                    logger.debug(f"Size variant has no size_name: {size_variant}")
+                                    continue
+                                
+                                size_name = _pick_lang(size_name_raw, lang)
+                                if not size_name:
+                                    logger.debug(f"Size name is empty after _pick_lang: {size_name_raw}")
+                                    continue
+                                
+                                if size_name not in available_sizes:
+                                    available_sizes[size_name] = 0
+                                available_sizes[size_name] += 1
+                            except Exception as e:
+                                logger.warning(f"Error processing size variant for product {product.id}: {str(e)}", exc_info=True)
+                                # Continue to next size variant, not skip entire product
+                                continue
+
+                    # Count genders from category parent (parentId.name)
+                    if product.category:
+                        try:
+                            # Ensure category is loaded
+                            if hasattr(product.category, 'parent') and product.category.parent:
+                                # Ensure parent is loaded
+                                parent = product.category.parent
+                                if hasattr(parent, 'name'):
+                                    gender_name = _pick_lang(parent.name, lang)
+                                    if gender_name:
+                                        if gender_name not in available_genders:
+                                            available_genders[gender_name] = 0
+                                        available_genders[gender_name] += 1
+                        except Exception as e:
+                            logger.warning(f"Error processing category/gender for product {product.id}: {str(e)}")
+                            continue
+
+                    # Collect prices for price range
+                    if product.original_price:
+                        try:
+                            prices.append(float(product.original_price))
+                        except (ValueError, TypeError):
+                            pass
+                except Exception as e:
+                    logger.warning(f"Error processing product {product.id}: {str(e)}")
+                    continue
+
+            # Format available brands
+            brands_list = [
+                {"name": name, "count": count}
+                for name, count in sorted(available_brands.items())
+            ]
+
+            # Format available colors
+            colors_list = [
+                {
+                    "name": name,
+                    "hex": data["hex"],
+                    "count": data["count"]
+                }
+                for name, data in sorted(available_colors.items())
+            ]
+
+            # Format available sizes
+            sizes_list = [
+                {"size": size, "count": count}
+                for size, count in sorted(available_sizes.items())
+            ]
+
+            # Format available genders
+            genders_list = [
+                {"name": name, "count": count}
+                for name, count in sorted(available_genders.items())
+            ]
+
+            # Calculate price range
+            price_range = {
+                "min": int(min(prices)) if prices else 0,
+                "max": int(max(prices)) if prices else 0
             }
-        })
+            
+            # Debug logging
+            logger.info(f"Filters calculated: {len(products)} products, "
+                       f"{products_with_colors} with colors ({total_colors} total), "
+                       f"{products_with_sizes} with sizes ({total_sizes} total), "
+                       f"Found {len(colors_list)} unique colors, {len(sizes_list)} unique sizes")
+
+            return {
+                "availableBrands": brands_list,
+                "availableColors": colors_list,
+                "availableSizes": sizes_list,
+                "availableGenders": genders_list,
+                "priceRange": price_range
+            }
+        except Exception as e:
+            logger.error(f"Error in _calculate_filters: {str(e)}", exc_info=True)
+            # Return empty filters on error
+            return self._get_empty_filters()
 
 
 class PublicCategoriesView(APIView):
