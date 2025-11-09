@@ -759,31 +759,55 @@ class ProductListView(APIView):
 
         result = []
         for product in page_items:
-            result.append({
-                "id": str(product.id),
-                "name": product.name,
-                "slug": product.slug,
-                "description": product.description,
-                "category": {
-                    "id": str(product.category.id),
-                    "name": product.category.name,
-                    "slug": product.category.slug
-                } if product.category else None,
-                "brand": {
-                    "id": str(product.brand.id),
-                    "name": product.brand.name,
-                    "slug": product.brand.slug
-                } if product.brand else None,
-                "price": product.original_price,
-                "discountPrice": product.discount_price,
-                "stock": product.stock,
-                "sold": product.sold,
-                "images": product.images,
-                "status": product.status,
-                "specifications": product.specifications,
-                "createdAt": product.created_at.isoformat(),
-                "updatedAt": product.updated_at.isoformat()
-            })
+            try:
+                category_data = None
+                if product.category:
+                    try:
+                        category_data = {
+                            "id": str(product.category.id),
+                            "name": product.category.name,
+                            "slug": product.category.slug
+                        }
+                    except Exception:
+                        category_data = None
+                
+                brand_data = None
+                if product.brand:
+                    try:
+                        brand_data = {
+                            "id": str(product.brand.id),
+                            "name": product.brand.name,
+                            "slug": product.brand.slug
+                        }
+                    except Exception:
+                        brand_data = None
+                
+                result.append({
+                    "id": str(product.id),
+                    "name": getattr(product, 'name', None),
+                    "slug": getattr(product, 'slug', ''),
+                    "description": getattr(product, 'description', None),
+                    "category": category_data,
+                    "brand": brand_data,
+                    "price": getattr(product, 'original_price', 0),
+                    "discountPrice": getattr(product, 'discount_price', None),
+                    "stock": getattr(product, 'stock', 0),
+                    "sold": getattr(product, 'sold', 0),
+                    "images": getattr(product, 'images', []),
+                    "status": getattr(product, 'status', 'active'),
+                    "gender": getattr(product, 'gender', None),
+                    "material": getattr(product, 'material', None),
+                    "weight": getattr(product, 'weight', None),
+                    "size": getattr(product, 'size', None),
+                    "createdAt": product.created_at.isoformat() if hasattr(product, 'created_at') and product.created_at else None,
+                    "updatedAt": product.updated_at.isoformat() if hasattr(product, 'updated_at') and product.updated_at else None
+                })
+            except Exception as e:
+                # Log error and skip product if there's an error serializing it
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error serializing product {getattr(product, 'id', 'unknown')}: {str(e)}")
+                continue
         
         return Response({
             "data": result,
@@ -852,10 +876,21 @@ class ProductListView(APIView):
                 dv = request.data.get('description.vi'); de = request.data.get('description.en'); dj = request.data.get('description.ja')
                 raw_desc = ({k: v for k, v in [('vi', dv), ('en', de), ('ja', dj)] if v} or request.data.get('description', ''))
 
-            raw_size = request.data.get('size_table')
-            if not isinstance(raw_size, dict):
+            raw_size_table = request.data.get('size_table')
+            if not isinstance(raw_size_table, dict):
                 sv = request.data.get('size_table.vi'); se = request.data.get('size_table.en'); sj = request.data.get('size_table.ja')
-                raw_size = ({k: v for k, v in [('vi', sv), ('en', se), ('ja', sj)] if v} or request.data.get('size_table'))
+                raw_size_table = ({k: v for k, v in [('vi', sv), ('en', se), ('ja', sj)] if v} or request.data.get('size_table'))
+
+            # Parse multilingual fields: gender, material, weight, size
+            def parse_multilingual_field(field_name):
+                raw = request.data.get(field_name)
+                if isinstance(raw, dict):
+                    return raw
+                fv = request.data.get(f'{field_name}.vi')
+                fe = request.data.get(f'{field_name}.en')
+                fj = request.data.get(f'{field_name}.ja')
+                multi = {k: v for k, v in [('vi', fv), ('en', fe), ('ja', fj)] if v}
+                return multi if multi else raw
 
             product = Product(
                 name=name,
@@ -867,10 +902,13 @@ class ProductListView(APIView):
                 brand=brand,
                 category=category,
                 status=request.data.get('status', 'active'),
-                specifications=request.data.get('specifications', {}),
                 tags=request.data.get('tags', []),
                 images=all_images,
-                size_table=raw_size,
+                size_table=raw_size_table,
+                gender=parse_multilingual_field('gender'),
+                material=parse_multilingual_field('material'),
+                weight=parse_multilingual_field('weight'),
+                size=parse_multilingual_field('size'),
             )
             product.save()
             
@@ -910,6 +948,24 @@ class ProductDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # Serialize colors with hex_color
+        colors_data = []
+        for color in product.colors:
+            colors_data.append({
+                "color_name": color.color_name,
+                "hex_color": color.hex_color,
+                "image": color.image,
+                "tags": color.tags
+            })
+        
+        # Serialize sizes
+        sizes_data = []
+        for size in product.sizes:
+            sizes_data.append({
+                "size_name": size.size_name,
+                "tags": size.tags
+            })
+        
         return Response({
             "id": str(product.id),
             "name": product.name,
@@ -931,7 +987,13 @@ class ProductDetailView(APIView):
             "sold": product.sold,
             "images": product.images,
             "status": product.status,
-            "specifications": product.specifications,
+            "gender": product.gender,
+            "material": product.material,
+            "weight": product.weight,
+            "size": product.size,
+            "colors": colors_data,
+            "sizes": sizes_data,
+            "size_table": product.size_table,
             "tags": product.tags,
             "createdAt": product.created_at.isoformat(),
             "updatedAt": product.updated_at.isoformat()
@@ -1000,14 +1062,65 @@ class ProductDetailView(APIView):
             product.category = ChildCategory.objects.get(id=ObjectId(request.data['categoryId']))
         if 'brandId' in request.data:
             product.brand = Brand.objects.get(id=ObjectId(request.data['brandId']))
-        if 'specifications' in request.data:
-            product.specifications = request.data['specifications']
         if 'tags' in request.data:
             product.tags = request.data['tags']
         if 'images' in request.data:
             images = request.data['images']
             if isinstance(images, list):
                 product.images = images
+        
+        # Update multilingual fields: gender, material, weight, size
+        def update_multilingual_field(field_name, product_obj):
+            if field_name in request.data or f'{field_name}.vi' in request.data or f'{field_name}.en' in request.data or f'{field_name}.ja' in request.data:
+                payload = request.data.get(field_name)
+                if isinstance(payload, dict):
+                    setattr(product_obj, field_name, payload)
+                else:
+                    cur = getattr(product_obj, field_name, None)
+                    if not isinstance(cur, dict):
+                        cur = {}
+                    if f'{field_name}.vi' in request.data: cur['vi'] = request.data.get(f'{field_name}.vi')
+                    if f'{field_name}.en' in request.data: cur['en'] = request.data.get(f'{field_name}.en')
+                    if f'{field_name}.ja' in request.data: cur['ja'] = request.data.get(f'{field_name}.ja')
+                    if payload and not cur:
+                        setattr(product_obj, field_name, payload)
+                    elif cur:
+                        setattr(product_obj, field_name, cur)
+        
+        update_multilingual_field('gender', product)
+        update_multilingual_field('material', product)
+        update_multilingual_field('weight', product)
+        update_multilingual_field('size', product)
+        
+        # Update colors (with hex_color support)
+        if 'colors' in request.data:
+            from .models import ColorVariant
+            colors_data = request.data.get('colors', [])
+            if isinstance(colors_data, list):
+                colors_list = []
+                for c in colors_data:
+                    if isinstance(c, dict):
+                        colors_list.append(ColorVariant(
+                            color_name=c.get('color_name'),
+                            hex_color=c.get('hex_color'),
+                            image=c.get('image'),
+                            tags=c.get('tags', [])
+                        ))
+                product.colors = colors_list
+        
+        # Update sizes
+        if 'sizes' in request.data:
+            from .models import SizeVariant
+            sizes_data = request.data.get('sizes', [])
+            if isinstance(sizes_data, list):
+                sizes_list = []
+                for s in sizes_data:
+                    if isinstance(s, dict):
+                        sizes_list.append(SizeVariant(
+                            size_name=s.get('size_name'),
+                            tags=s.get('tags', [])
+                        ))
+                product.sizes = sizes_list
         
         try:
             product.save()

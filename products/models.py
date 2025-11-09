@@ -146,14 +146,15 @@ class ChildCategory(me.Document):
 
 class ColorVariant(me.EmbeddedDocument):
     """Color variant embedded in Product"""
-    color_name = me.StringField(required=True)
+    color_name = me.DynamicField(required=True)  # Support multilingual
+    hex_color = me.StringField()  # Hex color code, e.g. #FF5733
     image = me.StringField()  # URL to color variant image
     tags = me.ListField(me.StringField())
 
 
 class SizeVariant(me.EmbeddedDocument):
     """Size variant embedded in Product"""
-    size_name = me.StringField(required=True)
+    size_name = me.DynamicField(required=True)  # Support multilingual
     tags = me.ListField(me.StringField())
 
 
@@ -188,13 +189,22 @@ class Product(me.Document):
     sizes = me.EmbeddedDocumentListField(SizeVariant, default=list)
     size_table = me.DynamicField()  # Size chart/table info (can be localized)
     
+    # Product attributes (all support multilingual)
+    gender = me.DynamicField()  # Gender: male, female, unisex (can be localized)
+    material = me.DynamicField()  # Material description (can be localized)
+    weight = me.DynamicField()  # Weight info (can be localized or number)
+    size = me.DynamicField()  # General size info (can be localized)
+    
     # Additional info from API spec
     status = me.StringField(
         choices=["active", "inactive", "out_of_stock", "low_stock"],
         default="active"
     )
-    specifications = me.DictField()  # Flexible specs: material, weight, etc.
     tags = me.ListField(me.StringField(), default=list)
+    
+    # Legacy field - kept for backward compatibility with old data
+    # This field is deprecated and should not be used in new code
+    specifications = me.DictField()  # DEPRECATED: Use gender, material, weight, size instead
     
     # Timestamps
     created_at = me.DateTimeField(default=datetime.utcnow)
