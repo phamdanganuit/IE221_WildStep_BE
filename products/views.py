@@ -228,6 +228,7 @@ class PublicProductsListView(APIView):
             search = (request.query_params.get('search') or '').strip()
             brand = (request.query_params.get('brand') or '').strip()
             gender = (request.query_params.get('gender') or '').strip()
+            parent_category = (request.query_params.get('parent_category') or '').strip()
             color = (request.query_params.get('color') or '').strip()
             size = (request.query_params.get('size') or '').strip()
             price_from = request.query_params.get('priceFrom')
@@ -304,6 +305,40 @@ class PublicProductsListView(APIView):
                             },
                             "filters": self._get_empty_filters()
                         })
+
+            # Apply parent category filter (filter by parent category slug)
+            if parent_category:
+                parent_cat = ParentCategory.objects(slug=parent_category, status="active").first()
+                if parent_cat:
+                    # Get all child categories under this parent
+                    child_categories = list(ChildCategory.objects(parent=parent_cat, status="active"))
+                    if child_categories:
+                        # Filter products by these child categories
+                        qs = qs(category__in=child_categories)
+                    else:
+                        # No child categories found
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+                else:
+                    # Parent category not found
+                    return Response({
+                        "data": [],
+                        "pagination": {
+                            "page": page,
+                            "page_size": page_size,
+                            "total": 0,
+                            "total_pages": 0
+                        },
+                        "filters": self._get_empty_filters()
+                    })
 
             # Apply gender filter
             if gender:
