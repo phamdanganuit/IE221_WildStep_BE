@@ -233,6 +233,7 @@ class PublicProductsListView(APIView):
             price_from = request.query_params.get('priceFrom')
             price_to = request.query_params.get('priceTo')
             category = (request.query_params.get('category') or '').strip()
+            category_slug = (request.query_params.get('category_slug') or '').strip()
             
             # Pagination parameters
             try:
@@ -429,6 +430,46 @@ class PublicProductsListView(APIView):
                 except (ValueError, TypeError):
                     pass
 
+            # Apply category_slug filter (supports both ParentCategory and ChildCategory slugs)
+            if category_slug:
+                # First, try to find a ChildCategory with this slug
+                child = ChildCategory.objects(slug=category_slug, status="active").first()
+                if child:
+                    # Filter by this specific child category
+                    qs = qs(category=child)
+                else:
+                    # If not found, try to find a ParentCategory with this slug
+                    parent = ParentCategory.objects(slug=category_slug, status="active").first()
+                    if parent:
+                        # Filter by all child categories under this parent
+                        children = list(ChildCategory.objects(parent=parent, status="active"))
+                        if children:
+                            qs = qs(category__in=children)
+                        else:
+                            # No child categories found under this parent
+                            return Response({
+                                "data": [],
+                                "pagination": {
+                                    "page": page,
+                                    "page_size": page_size,
+                                    "total": 0,
+                                    "total_pages": 0
+                                },
+                                "filters": self._get_empty_filters()
+                            })
+                    else:
+                        # Category slug not found
+                        return Response({
+                            "data": [],
+                            "pagination": {
+                                "page": page,
+                                "page_size": page_size,
+                                "total": 0,
+                                "total_pages": 0
+                            },
+                            "filters": self._get_empty_filters()
+                        })
+
             # Apply special category filter
             if category:
                 if category == 'Sản-phẩm-mới' or category == 'San-pham-moi':
@@ -483,6 +524,9 @@ class PublicProductsListView(APIView):
             # Apply sorting
             if sort == 'popular':
                 products.sort(key=lambda p: ((p.sold or 0), (p.rate or 0)), reverse=True)
+            elif sort == 'best_sellers':
+                # Sort by sold count only (top selling products)
+                products.sort(key=lambda p: (p.sold or 0), reverse=True)
             elif sort == 'newest':
                 products.sort(key=lambda p: p.created_at or datetime.min, reverse=True)
             elif sort == 'oldest':
