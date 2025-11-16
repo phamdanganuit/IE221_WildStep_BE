@@ -1370,3 +1370,179 @@ class ProductSearchView(APIView):
                 "max": int(max_price) if max_price > 0 else 0
             }
         }
+
+
+class ProductDetailView(APIView):
+    """
+    GET /api/products/{id_or_slug} - Get product detail by ID or slug
+    Public endpoint - No authentication required
+    """
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request, id_or_slug):
+        try:
+            # Get language from query params
+            lang = (request.query_params.get('lang') or 'vi').strip() or 'vi'
+            
+            # Try to find product by ID first, then by slug
+            product = None
+            try:
+                # Try as ObjectId first
+                product = Product.objects(id=id_or_slug, status="active").first()
+            except Exception:
+                pass
+            
+            if not product:
+                # Try to find by slug
+                product = Product.objects(slug=id_or_slug, status="active").first()
+            
+            if not product:
+                return Response(
+                    {
+                        "error": {
+                            "code": "PRODUCT_NOT_FOUND",
+                            "message": "Không tìm thấy sản phẩm"
+                        }
+                    },
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Ensure brand and category are loaded
+            if product.brand:
+                product.brand.reload()
+            if product.category:
+                product.category.reload()
+                if product.category.parent:
+                    product.category.parent.reload()
+            
+            # Build response data
+            response_data = {
+                "id": str(product.id),
+                "slug": product.slug,
+                "name": {
+                    "vi": _pick_lang(product.name, 'vi'),
+                    "en": _pick_lang(product.name, 'en'),
+                    "ja": _pick_lang(product.name, 'ja')
+                },
+                "description": {
+                    "vi": _pick_lang(product.description, 'vi') or "",
+                    "en": _pick_lang(product.description, 'en') or "",
+                    "ja": _pick_lang(product.description, 'ja') or ""
+                },
+                "price": int(product.original_price) if product.original_price else 0,
+                "discountPrice": int(product.discount_price) if product.discount_price else int(product.original_price) if product.original_price else 0,
+                "discount": int(product.discount) if product.discount else 0,
+                "images": product.images or [],
+                "stock": product.stock or 0,
+                "soldCount": product.sold or 0,
+                "rating": product.rate or 0,
+                "reviewCount": 0,  # TODO: Calculate from reviews collection
+                "status": product.status,
+                "tags": product.tags or [],
+                "createdAt": product.created_at.isoformat() if product.created_at else None,
+                "updatedAt": product.updated_at.isoformat() if product.updated_at else None
+            }
+            
+            # Add brand info
+            if product.brand:
+                response_data["brand"] = {
+                    "id": str(product.brand.id),
+                    "name": {
+                        "vi": _pick_lang(product.brand.name, 'vi'),
+                        "en": _pick_lang(product.brand.name, 'en'),
+                        "ja": _pick_lang(product.brand.name, 'ja')
+                    },
+                    "logo": product.brand.logo or ""
+                }
+            
+            # Add category info
+            if product.category:
+                response_data["category"] = {
+                    "id": str(product.category.id),
+                    "name": {
+                        "vi": _pick_lang(product.category.name, 'vi'),
+                        "en": _pick_lang(product.category.name, 'en'),
+                        "ja": _pick_lang(product.category.name, 'ja')
+                    },
+                    "slug": product.category.slug
+                }
+                
+                # Add parent category if exists
+                if product.category.parent:
+                    response_data["category"]["parent"] = {
+                        "id": str(product.category.parent.id),
+                        "name": {
+                            "vi": _pick_lang(product.category.parent.name, 'vi'),
+                            "en": _pick_lang(product.category.parent.name, 'en'),
+                            "ja": _pick_lang(product.category.parent.name, 'ja')
+                        },
+                        "slug": product.category.parent.slug
+                    }
+            
+            # Build specifications
+            specifications = {}
+            
+            # Add sizes
+            if product.sizes and len(product.sizes) > 0:
+                sizes = []
+                for size_variant in product.sizes:
+                    size_name = _pick_lang(size_variant.size_name, lang)
+                    if size_name and size_name not in sizes:
+                        sizes.append(size_name)
+                if sizes:
+                    specifications["sizes"] = sizes
+            
+            # Add colors
+            if product.colors and len(product.colors) > 0:
+                colors = []
+                for color_variant in product.colors:
+                    color_name = _pick_lang(color_variant.color_name, lang)
+                    if color_name:
+                        color_data = {
+                            "name": color_name,
+                            "hex": color_variant.hex_color or "#000000"
+                        }
+                        if color_variant.image:
+                            color_data["image"] = color_variant.image
+                        colors.append(color_data)
+                if colors:
+                    specifications["colors"] = colors
+            
+            # Add other specifications
+            if product.material:
+                material = _pick_lang(product.material, lang)
+                if material:
+                    specifications["material"] = material
+            
+            if product.weight:
+                weight = _pick_lang(product.weight, lang)
+                if weight:
+                    specifications["weight"] = weight
+            
+            if product.gender:
+                gender = _pick_lang(product.gender, lang)
+                if gender:
+                    specifications["gender"] = gender
+            
+            # Add size table if exists
+            if product.size_table:
+                size_table = _pick_lang(product.size_table, lang)
+                if size_table:
+                    specifications["sizeTable"] = size_table
+            
+            response_data["specifications"] = specifications
+            
+            return Response(response_data)
+            
+        except Exception as e:
+            logger.error(f"Error in ProductDetailView: {str(e)}", exc_info=True)
+            return Response(
+                {
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "Có lỗi xảy ra khi tải thông tin sản phẩm"
+                    }
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
