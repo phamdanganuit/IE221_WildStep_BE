@@ -12,6 +12,8 @@ class ProductInCart(me.EmbeddedDocument):
     # Optional: color, size, price_at_add_time
     color = me.StringField()
     size = me.StringField()
+    
+    meta = {"strict": False}  # Ignore unknown fields like _id in embedded documents
 
 
 class Cart(me.Document):
@@ -54,6 +56,8 @@ class OrderItem(me.EmbeddedDocument):
     # Optional variants
     color = me.StringField()
     size = me.StringField()
+    
+    meta = {"strict": False}  # Ignore unknown fields like _id in embedded documents
 
 
 class Order(me.Document):
