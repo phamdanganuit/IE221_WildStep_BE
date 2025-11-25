@@ -51,6 +51,15 @@ class User(me.Document):
         ]
     }
 
+    @property
+    def is_authenticated(self):
+        """DRF expects Django users to expose this flag."""
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
 
 # CUỐI CÙNG, ĐỊNH NGHĨA ADDRESS, VÌ NÓ THAM CHIẾU ĐẾN USER ĐÃ TỒN TẠI Ở TRÊN
 class Address(me.Document):

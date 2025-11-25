@@ -12,6 +12,7 @@ from .views import (
     OrderReviewableItemsView,
     OrderReviewCreateView,
     OrderReviewUpdateView,
+    ReviewImageUploadView,
     UserVoucherListView,
     AddVoucherView,
     RemoveVoucherView,
@@ -40,5 +41,6 @@ urlpatterns = [
     path("orders/<str:orderId>/reviewable-items", OrderReviewableItemsView.as_view(), name="order-reviewable-items"),
     path("orders/<str:orderId>/reviews", OrderReviewCreateView.as_view(), name="order-review-create"),
     path("orders/<str:orderId>/reviews/<str:reviewId>", OrderReviewUpdateView.as_view(), name="order-review-update"),
+    path("reviews/upload-image", ReviewImageUploadView.as_view(), name="review-image-upload"),
 ]
 

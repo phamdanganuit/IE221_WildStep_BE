@@ -83,5 +83,13 @@ else:
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
-    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+    ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "users.authentication.JWTAuthentication",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "review_uploads": os.getenv("REVIEW_UPLOAD_RATE", "10/minute"),
+    },
 }

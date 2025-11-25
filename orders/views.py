@@ -2,16 +2,27 @@
 Cart API Views
 """
 import logging
+import os
+import uuid
 from datetime import datetime
 
 from bson import ObjectId
 from bson.errors import InvalidId
 from mongoengine.errors import ValidationError as MEValidationError
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.utils import timezone
+
 from users.auth import require_auth
+from users.authentication import JWTAuthentication
 from users.models import User, Address
 from products.models import Product, ChildCategory
 from products.views import _pick_lang
@@ -26,6 +37,18 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+MAX_REVIEW_IMAGE_FILES = int(os.getenv("REVIEW_IMAGE_MAX_FILES", "5"))
+MAX_REVIEW_IMAGE_SIZE_MB = int(os.getenv("REVIEW_IMAGE_MAX_MB", "5"))
+MAX_REVIEW_IMAGE_SIZE_BYTES = MAX_REVIEW_IMAGE_SIZE_MB * 1024 * 1024
+REVIEW_IMAGE_SUBDIR = os.getenv("REVIEW_IMAGE_SUBDIR", "reviews").strip("/") or "reviews"
+ALLOWED_REVIEW_IMAGE_MIME_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+ALLOWED_REVIEW_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _get_or_create_cart(user):
@@ -930,6 +953,113 @@ def _validate_images(images):
             raise ValueError("Mỗi phần tử trong images phải là chuỗi")
         sanitized.append(img.strip())
     return sanitized
+
+
+class ReviewUploadThrottle(UserRateThrottle):
+    scope = "review_uploads"
+
+
+class ReviewImageUploadView(APIView):
+    """
+    POST /api/reviews/upload-image
+    Upload temporary review media and return their accessible URLs.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ReviewUploadThrottle]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        files = request.FILES.getlist("files")
+        if not files:
+            return Response({"detail": "files là bắt buộc"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(files) > MAX_REVIEW_IMAGE_FILES:
+            return Response(
+                {"detail": f"Tối đa {MAX_REVIEW_IMAGE_FILES} ảnh mỗi lần upload"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        saved_paths = []
+        image_urls = []
+        storage = self._get_storage()
+
+        try:
+            for upload in files:
+                extension = self._validate_upload(upload)
+                saved_path = self._store_file(upload, extension, storage)
+                saved_paths.append(saved_path)
+                image_urls.append(self._build_file_url(saved_path, storage))
+        except ValidationError as exc:
+            self._cleanup_files(saved_paths, storage)
+            detail = exc.detail if isinstance(exc.detail, str) else exc.detail[0]
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.error("Failed to upload review images: %s", exc, exc_info=True)
+            self._cleanup_files(saved_paths, storage)
+            return Response(
+                {"detail": "Không thể upload ảnh lúc này, vui lòng thử lại"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({"images": image_urls}, status=status.HTTP_200_OK)
+
+    def _validate_upload(self, upload):
+        if upload.size > MAX_REVIEW_IMAGE_SIZE_BYTES:
+            raise ValidationError(f"Kích thước ảnh tối đa {MAX_REVIEW_IMAGE_SIZE_MB}MB")
+
+        content_type = (upload.content_type or "").lower()
+        if content_type not in ALLOWED_REVIEW_IMAGE_MIME_TYPES:
+            raise ValidationError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WEBP")
+
+        extension = os.path.splitext(upload.name or "")[1].lower()
+        if extension not in ALLOWED_REVIEW_IMAGE_EXTENSIONS:
+            extension = ALLOWED_REVIEW_IMAGE_MIME_TYPES[content_type]
+
+        return extension or ALLOWED_REVIEW_IMAGE_MIME_TYPES[content_type]
+
+    def _store_file(self, upload, extension, storage):
+        filename = self._build_filename(extension)
+        return storage.save(filename, upload)
+
+    def _build_filename(self, extension):
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S%f")
+        unique = uuid.uuid4().hex
+        filename = f"{timestamp}_{unique}{extension}"
+        return f"{REVIEW_IMAGE_SUBDIR}/{filename}"
+
+    def _cleanup_files(self, paths, storage):
+        for path in paths:
+            try:
+                storage.delete(path)
+            except Exception as exc:
+                logger.warning("Failed to cleanup uploaded file %s: %s", path, exc)
+
+    def _build_file_url(self, saved_path, storage):
+        try:
+            url = storage.url(saved_path)
+        except Exception:
+            return f"/media/{saved_path}"
+
+        if url.startswith("http") or url.startswith("/"):
+            return url
+        return f"/media/{url.lstrip('/')}"
+
+    def _get_storage(self):
+        azure_conn = getattr(settings, "AZURE_STORAGE_CONNECTION_STRING", "") or os.getenv(
+            "AZURE_STORAGE_CONNECTION_STRING", ""
+        )
+        azure_account = getattr(settings, "AZURE_STORAGE_ACCOUNT_NAME", "") or os.getenv(
+            "AZURE_STORAGE_ACCOUNT_NAME", ""
+        )
+
+        if azure_conn and azure_account:
+            from storages.backends.azure_storage import AzureStorage
+
+            return AzureStorage()
+
+        return default_storage
 
 
 class OrderReviewableItemsView(APIView):
