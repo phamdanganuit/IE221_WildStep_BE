@@ -1,7 +1,14 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Banner, Brand, Product, ParentCategory, ChildCategory, CustomerReview, HeroContent
 from rest_framework import status
+from bson import ObjectId
+from bson.errors import InvalidId
+
+from orders.models import OrderReview
+from users.auth import require_auth
+from users.models import User
+from .models import Banner, Brand, Product, ParentCategory, ChildCategory, CustomerReview, HeroContent
+
 import re
 import unicodedata
 from datetime import datetime, timedelta
@@ -1417,6 +1424,7 @@ class ProductDetailView(APIView):
                     product.category.parent.reload()
             
             # Build response data
+            review_count = OrderReview.objects(product_id=product.id).count()
             response_data = {
                 "id": str(product.id),
                 "slug": product.slug,
@@ -1437,7 +1445,7 @@ class ProductDetailView(APIView):
                 "stock": product.stock or 0,
                 "soldCount": product.sold or 0,
                 "rating": product.rate or 0,
-                "reviewCount": 0,  # TODO: Calculate from reviews collection
+                "reviewCount": review_count,
                 "status": product.status,
                 "tags": product.tags or [],
                 "createdAt": product.created_at.isoformat() if product.created_at else None,
@@ -1546,3 +1554,390 @@ class ProductDetailView(APIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class ProductReviewListView(APIView):
+    """
+    GET /api/products/{product_identifier}/reviews - List public reviews for a product
+    """
+
+    authentication_classes = []
+    permission_classes = []
+
+    def _get_product(self, identifier):
+        product = None
+        try:
+            product = Product.objects(id=ObjectId(identifier), status="active").first()
+        except (InvalidId, Exception):
+            product = None
+
+        if not product:
+            product = Product.objects(slug=identifier, status="active").first()
+        return product
+
+    def _extract_variant(self, review):
+        """Return size/color info from the original order item if possible."""
+        if not review.order or not review.order_item_id:
+            return None
+
+        try:
+            _, idx_str = review.order_item_id.split(":", 1)
+            idx = int(idx_str)
+        except (ValueError, AttributeError):
+            return None
+
+        order = review.order
+        if 0 <= idx < len(order.items):
+            item = order.items[idx]
+            return {
+                "color": item.color,
+                "size": item.size,
+            }
+        return None
+
+    def _serialize_review(self, review):
+        user_info = None
+        if review.user:
+            try:
+                user = review.user
+                user_info = {
+                    "id": str(user.id),
+                    "displayName": user.displayName or user.username or "Ẩn danh",
+                    "avatar": user.avatar,
+                }
+            except Exception:
+                user_info = None
+
+        return {
+            "reviewId": str(review.id),
+            "orderId": str(review.order.id) if review.order else None,
+            "order_item_id": review.order_item_id,
+            "rating": review.rating,
+            "comment": review.comment or "",
+            "images": review.images or [],
+            "variant": self._extract_variant(review),
+            "user": user_info,
+            "likeCount": review.like_count or len(review.liked_user_ids or []),
+            "created_at": review.created_at.isoformat() if review.created_at else None,
+            "updated_at": review.updated_at.isoformat() if review.updated_at else None,
+        }
+
+    def _parse_rating_filters(self, request):
+        """Normalize rating query params into a sorted list of distinct ints (1-5)."""
+        rating_values = set()
+
+        def _maybe_add(value):
+            try:
+                num = int(str(value).strip())
+            except (TypeError, ValueError):
+                return
+            if 1 <= num <= 5:
+                rating_values.add(num)
+
+        single_rating = request.query_params.get("rating")
+        if single_rating is not None:
+            _maybe_add(single_rating)
+
+        for key in ("ratings", "ratings[]"):
+            values = []
+            try:
+                # QueryDict implements getlist; fallback to simple get for safety
+                values = request.query_params.getlist(key)
+            except AttributeError:
+                raw_value = request.query_params.get(key)
+                if raw_value:
+                    values = [raw_value]
+
+            if not values:
+                raw_value = request.query_params.get(key)
+                if raw_value and "," in raw_value:
+                    values = [part.strip() for part in raw_value.split(",")]
+
+            for val in values or []:
+                _maybe_add(val)
+
+        return sorted(rating_values)
+
+    def _should_filter_images(self, request):
+        """Return True if has_images/has_media query param asks for media filter."""
+        raw_value = (
+            request.query_params.get("has_images")
+            if "has_images" in request.query_params
+            else None
+        )
+        if raw_value is None:
+            raw_value = (
+                request.query_params.get("has_media")
+                if "has_media" in request.query_params
+                else None
+            )
+
+        if raw_value is None:
+            return False
+
+        normalized = str(raw_value).strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return False
+
+    def _get_rating_stats(self, product_id):
+        """Return (distribution_dict, rating_value_sum) without mapReduce."""
+        distribution = {str(i): 0 for i in range(1, 6)}
+        total_rating_value = 0
+
+        try:
+            pipeline = [
+                {"$match": {"product_id": product_id, "rating": {"$ne": None}}},
+                {"$group": {"_id": "$rating", "count": {"$sum": 1}}},
+            ]
+            cursor = OrderReview._get_collection().aggregate(pipeline)
+            for row in cursor:
+                rating_value = row.get("_id")
+                if rating_value is None:
+                    continue
+                try:
+                    rating_float = float(rating_value)
+                except (TypeError, ValueError):
+                    continue
+                rating_key = str(int(rating_float))
+                if rating_key not in distribution:
+                    continue
+                count = int(row.get("count") or 0)
+                distribution[rating_key] = count
+                total_rating_value += rating_float * count
+        except Exception as exc:
+            logger.warning(
+                "Failed to aggregate rating distribution for product %s: %s",
+                product_id,
+                exc,
+            )
+
+        return distribution, total_rating_value
+
+    def get(self, request, product_identifier):
+        lang = (request.query_params.get("lang") or "vi").strip() or "vi"
+        sort_param = (request.query_params.get("sort") or "newest").strip().lower()
+        rating_filters = self._parse_rating_filters(request)
+        has_images_filter = self._should_filter_images(request)
+
+        try:
+            page = max(1, int(request.query_params.get("page") or 1))
+        except ValueError:
+            page = 1
+
+        try:
+            page_size = int(request.query_params.get("page_size") or 5)
+        except ValueError:
+            page_size = 5
+
+        if page_size < 1:
+            page_size = 5
+        if page_size > 50:
+            return Response(
+                {
+                    "error": {
+                        "code": "INVALID_PARAMS",
+                        "message": "page_size must be between 1 and 50",
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        product = self._get_product(product_identifier)
+        if not product:
+            return Response(
+                {
+                    "error": {
+                        "code": "PRODUCT_NOT_FOUND",
+                        "message": "Không tìm thấy sản phẩm",
+                    }
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        base_qs = OrderReview.objects(product_id=product.id)
+        total_reviews = base_qs.count()
+
+        rating_distribution = {str(i): 0 for i in range(1, 6)}
+        average_rating = 0.0
+        if total_reviews:
+            rating_distribution, total_rating_value = self._get_rating_stats(product.id)
+            average_rating = round(total_rating_value / total_reviews, 2)
+
+        with_images_total = base_qs.filter(images__0__exists=True).count()
+
+        filtered_qs = base_qs
+        if rating_filters:
+            filtered_qs = filtered_qs.filter(rating__in=rating_filters)
+
+        if has_images_filter:
+            filtered_qs = filtered_qs.filter(images__0__exists=True)
+
+        applied_has_images_filter = has_images_filter
+        if sort_param == "with_images":
+            filtered_qs = filtered_qs.filter(images__0__exists=True)
+            applied_has_images_filter = True
+            order_fields = ("-created_at",)
+        else:
+            order_fields = {
+                "newest": ("-created_at",),
+                "oldest": ("created_at",),
+                "highest": ("-rating", "-created_at"),
+                "lowest": ("rating", "-created_at"),
+            }.get(sort_param, ("-created_at",))
+
+        filtered_qs = filtered_qs.order_by(*order_fields)
+        total_filtered = filtered_qs.count()
+
+        skip = (page - 1) * page_size
+        reviews = list(filtered_qs.skip(skip).limit(page_size))
+
+        response_payload = {
+            "product": {
+                "id": str(product.id),
+                "slug": product.slug,
+                "name": _pick_lang(product.name, lang) or "",
+                "thumbnail": product.images[0] if product.images else None,
+            },
+            "summary": {
+                "count": total_reviews,
+                "average": average_rating,
+                "with_images": with_images_total,
+                "distribution": rating_distribution,
+            },
+            "filters": {
+                "sort": sort_param,
+                "has_images": applied_has_images_filter,
+                "ratings": rating_filters,
+            },
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total_filtered,
+                "total_pages": (total_filtered + page_size - 1) // page_size if total_filtered else 0,
+            },
+            "reviews": [self._serialize_review(review) for review in reviews],
+        }
+
+        return Response(response_payload, status=status.HTTP_200_OK)
+
+
+class ReviewLikeToggleView(APIView):
+    """
+    GET/POST /api/reviews/{review_id}/like
+    GET  - return current like status/count for authenticated user
+    POST - toggle (default) or explicitly like/unlike via body/query param `action`
+    """
+
+    def _get_review(self, review_id):
+        try:
+            review_obj_id = ObjectId(review_id)
+        except (InvalidId, TypeError):
+            return None
+        return OrderReview.objects(id=review_obj_id).first()
+
+    def _get_user(self, request):
+        claims = getattr(request, "user_claims", {}) or {}
+        user_id = claims.get("sub")
+        if not user_id:
+            return None
+        try:
+            user_obj_id = ObjectId(user_id)
+        except (InvalidId, TypeError):
+            return None
+        return User.objects(id=user_obj_id).first()
+
+    def _build_payload(self, review, liked):
+        like_count = review.like_count if review.like_count is not None else len(review.liked_user_ids or [])
+        return {
+            "reviewId": str(review.id),
+            "likeCount": like_count,
+            "liked": bool(liked),
+        }
+
+    @require_auth
+    def get(self, request, review_id):
+        review = self._get_review(review_id)
+        if not review:
+            return Response({"detail": "Review not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        user = self._get_user(request)
+        if not user:
+            return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        liked = False
+        if review.liked_user_ids:
+            liked = user.id in review.liked_user_ids
+
+        return Response(self._build_payload(review, liked), status=status.HTTP_200_OK)
+
+    def _process_action(self, request, review_id, forced_action=None):
+        review = self._get_review(review_id)
+        if not review:
+            return Response({"detail": "Review not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        user = self._get_user(request)
+        if not user:
+            return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        action_source = forced_action
+        if not action_source:
+            if hasattr(request.data, "get"):
+                action_source = request.data.get("action")
+        if not action_source:
+            action_source = request.query_params.get("action")
+        action = str(action_source or "toggle").strip().lower()
+
+        liked_ids = list(review.liked_user_ids or [])
+        user_already_liked = user.id in liked_ids
+        liked_after = user_already_liked
+        changed = False
+
+        if action == "like":
+            if not user_already_liked:
+                liked_ids.append(user.id)
+                liked_after = True
+                changed = True
+        elif action == "unlike":
+            if user_already_liked:
+                liked_ids = [uid for uid in liked_ids if uid != user.id]
+                liked_after = False
+                changed = True
+            else:
+                liked_after = False
+        else:  # toggle
+            if user_already_liked:
+                liked_ids = [uid for uid in liked_ids if uid != user.id]
+                liked_after = False
+                changed = True
+            else:
+                liked_ids.append(user.id)
+                liked_after = True
+                changed = True
+
+        if changed:
+            review.liked_user_ids = liked_ids
+            review.like_count = len(liked_ids)
+            review.save()
+        else:
+            # Ensure like_count reflects stored state even if we did not mutate
+            review.like_count = review.like_count if review.like_count is not None else len(review.liked_user_ids or [])
+
+        return Response(self._build_payload(review, liked_after), status=status.HTTP_200_OK)
+
+    @require_auth
+    def post(self, request, review_id):
+        return self._process_action(request, review_id)
+
+
+class ReviewDislikeView(ReviewLikeToggleView):
+    """
+    POST /api/reviews/{review_id}/dislike
+    Force unlike action regardless of payload to offer a dedicated endpoint.
+    """
+
+    @require_auth
+    def post(self, request, review_id):
+        return self._process_action(request, review_id, forced_action="unlike")

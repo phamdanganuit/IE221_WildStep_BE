@@ -147,6 +147,38 @@ class Order(me.Document):
         return f"{self.order_number} - {self.user.email if self.user else 'Unknown'}"
 
 
+class OrderReview(me.Document):
+    """Customer review for an order item"""
+    order = me.ReferenceField(Order, required=True)
+    user = me.ReferenceField('User', required=True)
+    order_item_id = me.StringField(required=True)
+    product_id = me.ObjectIdField(required=True)
+    rating = me.IntField(min_value=1, max_value=5, required=True)
+    comment = me.StringField()
+    images = me.ListField(me.StringField(), default=list)
+    like_count = me.IntField(default=0)
+    liked_user_ids = me.ListField(me.ObjectIdField(), default=list)
+    created_at = me.DateTimeField(default=datetime.utcnow)
+    updated_at = me.DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "order_reviews",
+        "indexes": [
+            "order",
+            "user",
+            "product_id",
+            "order_item_id",
+            ("order", "order_item_id"),
+        ],
+        "ordering": ["-created_at"],
+    }
+
+    def save(self, *args, **kwargs):
+        """Sync updated_at for each write"""
+        self.updated_at = datetime.utcnow()
+        return super().save(*args, **kwargs)
+
+
 class Voucher(me.Document):
     """Voucher/Coupon model"""
     name = me.StringField(required=True)

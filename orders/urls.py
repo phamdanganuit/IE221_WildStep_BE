@@ -9,6 +9,9 @@ from .views import (
     OrderListView,
     OrderDetailView,
     OrderStatusUpdateView,
+    OrderReviewableItemsView,
+    OrderReviewCreateView,
+    OrderReviewUpdateView,
     UserVoucherListView,
     AddVoucherView,
     RemoveVoucherView,
@@ -34,5 +37,8 @@ urlpatterns = [
     path("orders", OrderListView.as_view(), name="order-list"),  # GET: list orders, POST: create order
     path("orders/<str:orderId>", OrderDetailView.as_view(), name="order-detail"),  # GET: get order detail
     path("orders/<str:orderId>/status", OrderStatusUpdateView.as_view(), name="order-status-update"),  # PATCH: update order status
+    path("orders/<str:orderId>/reviewable-items", OrderReviewableItemsView.as_view(), name="order-reviewable-items"),
+    path("orders/<str:orderId>/reviews", OrderReviewCreateView.as_view(), name="order-review-create"),
+    path("orders/<str:orderId>/reviews/<str:reviewId>", OrderReviewUpdateView.as_view(), name="order-review-update"),
 ]
 

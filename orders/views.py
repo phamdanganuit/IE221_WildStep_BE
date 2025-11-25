@@ -1,19 +1,31 @@
 """
 Cart API Views
 """
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
+import logging
+from datetime import datetime
+
 from bson import ObjectId
 from bson.errors import InvalidId
 from mongoengine.errors import ValidationError as MEValidationError
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from users.auth import require_auth
 from users.models import User, Address
 from products.models import Product, ChildCategory
 from products.views import _pick_lang
-from .models import Cart, ProductInCart, Voucher, UserVoucher, Order, OrderItem
-from datetime import datetime
+from .models import (
+    Cart,
+    ProductInCart,
+    Voucher,
+    UserVoucher,
+    Order,
+    OrderItem,
+    OrderReview,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _get_or_create_cart(user):
@@ -23,6 +35,34 @@ def _get_or_create_cart(user):
         cart = Cart(user=user)
         cart.save()
     return cart
+
+
+def _sync_product_rating(product_id):
+    """Recalculate average rating for a product from its reviews."""
+    if not product_id:
+        return
+
+    try:
+        pipeline = [
+            {"$match": {"product_id": product_id, "rating": {"$ne": None}}},
+            {
+                "$group": {
+                    "_id": "$product_id",
+                    "avg_rating": {"$avg": "$rating"},
+                }
+            },
+        ]
+        result = next(OrderReview._get_collection().aggregate(pipeline), None)
+        avg_rating = 0.0
+        if result and result.get("avg_rating") is not None:
+            try:
+                avg_rating = round(float(result["avg_rating"]), 2)
+            except (TypeError, ValueError):
+                avg_rating = 0.0
+
+        Product.objects(id=product_id).update_one(set__rate=avg_rating)
+    except Exception as exc:
+        logger.warning("Failed to sync rating for product %s: %s", product_id, exc)
 
 
 def _validate_size_color(product, size, color):
@@ -115,6 +155,33 @@ def _serialize_cart(cart, include_product_details=False):
         "products": [_serialize_cart_item(item, include_product_details) for item in cart.products],
         "created_at": cart.created_at.isoformat() if cart.created_at else None,
         "updated_at": cart.updated_at.isoformat() if cart.updated_at else None
+    }
+
+
+def _make_order_item_id(order_id, index):
+    """Create stable identifier for order item"""
+    return f"{str(order_id)}:{index}"
+
+
+def _build_order_item_map(order):
+    """Map order_item_id -> (order_item, index) for quick lookup"""
+    mapping = {}
+    for idx, item in enumerate(order.items):
+        mapping[_make_order_item_id(order.id, idx)] = (item, idx)
+    return mapping
+
+
+def _serialize_review(review):
+    """Serialize order review to response format"""
+    return {
+        "reviewId": str(review.id),
+        "order_item_id": review.order_item_id,
+        "product_id": str(review.product_id),
+        "rating": review.rating,
+        "comment": review.comment or "",
+        "images": review.images or [],
+        "created_at": review.created_at.isoformat() if review.created_at else None,
+        "updated_at": review.updated_at.isoformat() if review.updated_at else None,
     }
 
 
@@ -843,6 +910,266 @@ def _serialize_order(order):
         }
     
     return data
+
+
+def _ensure_reviewable_order(order):
+    """Ensure order is eligible for reviews"""
+    if order.status != "completed":
+        raise PermissionError("Bạn chỉ có thể đánh giá khi đơn đã hoàn tất")
+
+
+def _validate_images(images):
+    """Validate list of image URLs"""
+    if images is None:
+        return []
+    if not isinstance(images, list):
+        raise ValueError("images phải là danh sách URL")
+    sanitized = []
+    for img in images:
+        if not isinstance(img, str):
+            raise ValueError("Mỗi phần tử trong images phải là chuỗi")
+        sanitized.append(img.strip())
+    return sanitized
+
+
+class OrderReviewableItemsView(APIView):
+    """GET /api/orders/:orderId/reviewable-items"""
+
+    @require_auth
+    def get(self, request, orderId):
+        try:
+            user_id = request.user_claims["sub"]
+            user = User.objects(id=ObjectId(user_id)).first()
+            if not user:
+                return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                order_obj_id = ObjectId(orderId)
+            except InvalidId:
+                return Response({"detail": "orderId không hợp lệ"}, status=status.HTTP_400_BAD_REQUEST)
+
+            order = Order.objects(id=order_obj_id, user=user).first()
+            if not order:
+                return Response({"detail": "Không tìm thấy đơn hàng"}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                _ensure_reviewable_order(order)
+            except PermissionError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+            existing_reviews = OrderReview.objects(order=order, user=user)
+            review_map = {review.order_item_id: review for review in existing_reviews}
+
+            items = []
+            for order_item_id, (item, _) in _build_order_item_map(order).items():
+                review = review_map.get(order_item_id)
+                items.append(
+                    {
+                        "order_item_id": order_item_id,
+                        "product_id": str(item.product_id),
+                        "product_name": item.product_name,
+                        "product_image": item.product_image,
+                        "color": item.color,
+                        "size": item.size,
+                        "quantity": item.quantity,
+                        "isRated": bool(review),
+                        "reviewId": str(review.id) if review else None,
+                    }
+                )
+
+            response_data = {
+                "orderId": str(order.id),
+                "status": order.status,
+                "completed_at": order.completed_date.isoformat() if order.completed_date else None,
+                "items": items,
+            }
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as exc:
+            return Response({"detail": f"Đã xảy ra lỗi: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class OrderReviewCreateView(APIView):
+    """POST /api/orders/:orderId/reviews"""
+
+    @require_auth
+    def post(self, request, orderId):
+        try:
+            user_id = request.user_claims["sub"]
+            user = User.objects(id=ObjectId(user_id)).first()
+            if not user:
+                return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                order_obj_id = ObjectId(orderId)
+            except InvalidId:
+                return Response({"detail": "orderId không hợp lệ"}, status=status.HTTP_400_BAD_REQUEST)
+
+            order = Order.objects(id=order_obj_id, user=user).first()
+            if not order:
+                return Response({"detail": "Không tìm thấy đơn hàng"}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                _ensure_reviewable_order(order)
+            except PermissionError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+            items_payload = request.data.get("items")
+            if not items_payload or not isinstance(items_payload, list):
+                return Response({"detail": "items phải là danh sách review"}, status=status.HTTP_400_BAD_REQUEST)
+
+            order_item_map = _build_order_item_map(order)
+
+            prepared_items = []
+            for payload in items_payload:
+                if not isinstance(payload, dict):
+                    return Response({"detail": "Mỗi review phải là object"}, status=status.HTTP_400_BAD_REQUEST)
+
+                order_item_id = payload.get("order_item_id")
+                if not order_item_id:
+                    return Response({"detail": "order_item_id là bắt buộc"}, status=status.HTTP_400_BAD_REQUEST)
+
+                item_tuple = order_item_map.get(order_item_id)
+                if not item_tuple:
+                    return Response({"detail": "order_item_id không hợp lệ"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+                order_item = item_tuple[0]
+
+                product_id = payload.get("product_id")
+                if not product_id or product_id != str(order_item.product_id):
+                    return Response({"detail": "product_id không khớp với đơn hàng"}, status=status.HTTP_400_BAD_REQUEST)
+
+                rating = payload.get("rating")
+                if rating is None or not isinstance(rating, int) or rating < 1 or rating > 5:
+                    return Response({"detail": "rating phải là số nguyên 1-5"}, status=status.HTTP_400_BAD_REQUEST)
+
+                comment = payload.get("comment", "")
+                if comment and not isinstance(comment, str):
+                    return Response({"detail": "comment phải là chuỗi"}, status=status.HTTP_400_BAD_REQUEST)
+
+                try:
+                    images = _validate_images(payload.get("images"))
+                except ValueError as exc:
+                    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+                existing_review = OrderReview.objects(order=order, order_item_id=order_item_id).first()
+                if existing_review:
+                    return Response(
+                        {"detail": "Sản phẩm này đã được đánh giá", "reviewId": str(existing_review.id)},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                prepared_items.append(
+                    {
+                        "order_item_id": order_item_id,
+                        "order_item": order_item,
+                        "rating": rating,
+                        "comment": comment or "",
+                        "images": images,
+                    }
+                )
+
+            created_reviews = []
+            touched_product_ids = set()
+            for item in prepared_items:
+                review = OrderReview(
+                    order=order,
+                    user=user,
+                    order_item_id=item["order_item_id"],
+                    product_id=item["order_item"].product_id,
+                    rating=item["rating"],
+                    comment=item["comment"],
+                    images=item["images"],
+                )
+                review.save()
+                created_reviews.append(review)
+                touched_product_ids.add(review.product_id)
+
+            for product_id in touched_product_ids:
+                _sync_product_rating(product_id)
+
+            response_data = {
+                "orderId": str(order.id),
+                "created": [_serialize_review(review) for review in created_reviews],
+            }
+
+            return Response(response_data, status=status.HTTP_201_CREATED)
+
+        except InvalidId:
+            return Response({"detail": "ID không hợp lệ"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({"detail": f"Đã xảy ra lỗi khi lưu review: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class OrderReviewUpdateView(APIView):
+    """PATCH /api/orders/:orderId/reviews/:reviewId"""
+
+    @require_auth
+    def patch(self, request, orderId, reviewId):
+        try:
+            user_id = request.user_claims["sub"]
+            user = User.objects(id=ObjectId(user_id)).first()
+            if not user:
+                return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                order_obj_id = ObjectId(orderId)
+                review_obj_id = ObjectId(reviewId)
+            except InvalidId:
+                return Response({"detail": "ID không hợp lệ"}, status=status.HTTP_400_BAD_REQUEST)
+
+            order = Order.objects(id=order_obj_id, user=user).first()
+            if not order:
+                return Response({"detail": "Không tìm thấy đơn hàng"}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                _ensure_reviewable_order(order)
+            except PermissionError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+            review = OrderReview.objects(id=review_obj_id, order=order, user=user).first()
+            if not review:
+                return Response({"detail": "Không tìm thấy review"}, status=status.HTTP_404_NOT_FOUND)
+
+            payload = request.data or {}
+            updated = False
+            rating_updated = False
+
+            if "rating" in payload:
+                rating = payload.get("rating")
+                if rating is None or not isinstance(rating, int) or rating < 1 or rating > 5:
+                    return Response({"detail": "rating phải là số nguyên 1-5"}, status=status.HTTP_400_BAD_REQUEST)
+                review.rating = rating
+                updated = True
+                rating_updated = True
+
+            if "comment" in payload:
+                comment = payload.get("comment")
+                if comment is not None and not isinstance(comment, str):
+                    return Response({"detail": "comment phải là chuỗi"}, status=status.HTTP_400_BAD_REQUEST)
+                review.comment = comment or ""
+                updated = True
+
+            if "images" in payload:
+                try:
+                    review.images = _validate_images(payload.get("images"))
+                except ValueError as exc:
+                    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                updated = True
+
+            if not updated:
+                return Response({"detail": "Không có dữ liệu để cập nhật"}, status=status.HTTP_400_BAD_REQUEST)
+
+            review.save()
+            if rating_updated:
+                _sync_product_rating(review.product_id)
+            return Response({"review": _serialize_review(review)}, status=status.HTTP_200_OK)
+
+        except InvalidId:
+            return Response({"detail": "ID không hợp lệ"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({"detail": f"Đã xảy ra lỗi khi cập nhật review: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class OrderCreateView(APIView):
