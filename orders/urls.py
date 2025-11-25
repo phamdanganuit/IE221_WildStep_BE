@@ -6,6 +6,9 @@ from .views import (
     CartCountView,
     VoucherValidateView,
     OrderCreateView,
+    OrderListView,
+    OrderDetailView,
+    OrderStatusUpdateView,
     UserVoucherListView,
     AddVoucherView,
     RemoveVoucherView,
@@ -27,6 +30,9 @@ urlpatterns = [
     path("removeVoucher", RemoveVoucherView.as_view(), name="remove-voucher"),  # DELETE: remove voucher
     
     # Order endpoints
-    path("orders", OrderCreateView.as_view(), name="order-create"),
+    # OrderListView handles both GET (list) and POST (create) for /orders
+    path("orders", OrderListView.as_view(), name="order-list"),  # GET: list orders, POST: create order
+    path("orders/<str:orderId>", OrderDetailView.as_view(), name="order-detail"),  # GET: get order detail
+    path("orders/<str:orderId>/status", OrderStatusUpdateView.as_view(), name="order-status-update"),  # PATCH: update order status
 ]
 

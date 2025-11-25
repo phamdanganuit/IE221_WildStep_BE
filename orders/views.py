@@ -1050,7 +1050,7 @@ class OrderCreateView(APIView):
             # Serialize and return
             response_data = _serialize_order(order)
             
-            return Response(response_data, status=status.HTTP_201_CREATED)
+            return Response({"order": response_data}, status=status.HTTP_201_CREATED)
             
         except InvalidId:
             return Response(
@@ -1331,6 +1331,285 @@ class RemoveVoucherView(APIView):
         except InvalidId:
             return Response(
                 {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ==================== ORDER MANAGEMENT VIEWS ====================
+
+def _serialize_order_simple(order):
+    """Serialize order to simple dict (for list view)"""
+    return {
+        "_id": str(order.id),
+        "order_number": order.order_number,
+        "status": order.status,
+        "total_price": order.total_price,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else None
+    }
+
+
+class OrderListView(APIView):
+    """GET /api/orders - Get list of orders with pagination and filters
+       POST /api/orders - Create new order (delegates to OrderCreateView logic)"""
+    
+    @require_auth
+    def get(self, request):
+        """Get list of orders for current user"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get query parameters
+            status_filter = request.query_params.get('status', '').strip()
+            page = int(request.query_params.get('page', 1))
+            limit = int(request.query_params.get('limit', 10))
+            sort_param = request.query_params.get('sort', '-created_at')
+            
+            # Validate page and limit
+            if page < 1:
+                page = 1
+            if limit < 1 or limit > 100:
+                limit = 10
+            
+            # Validate status
+            valid_statuses = ["placed", "pending", "processing", "shipping", "completed", "cancelled"]
+            if status_filter and status_filter not in valid_statuses:
+                return Response(
+                    {"detail": "Status không hợp lệ"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Map "placed" to "pending" (for backward compatibility)
+            if status_filter == "placed":
+                status_filter = "pending"
+            
+            # Build query
+            query = Order.objects(user=user)
+            
+            # Filter by status
+            if status_filter:
+                query = query.filter(status=status_filter)
+            
+            # Sort
+            if sort_param == 'created_at':
+                query = query.order_by('created_at')
+            elif sort_param == '-created_at':
+                query = query.order_by('-created_at')
+            else:
+                query = query.order_by('-created_at')  # Default
+            
+            # Get total count
+            total = query.count()
+            
+            # Pagination
+            skip = (page - 1) * limit
+            orders = query.skip(skip).limit(limit)
+            
+            # Serialize orders
+            orders_list = []
+            for order in orders:
+                orders_list.append(_serialize_order(order))
+            
+            # Build response
+            response_data = {
+                "orders": orders_list
+            }
+            
+            # Add pagination info if needed
+            if total > 0:
+                total_pages = (total + limit - 1) // limit
+                response_data["pagination"] = {
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "totalPages": total_pages
+                }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except ValueError:
+            return Response(
+                {"detail": "Invalid page or limit parameter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @require_auth
+    def post(self, request):
+        """Create new order from cart - delegates to OrderCreateView logic"""
+        # Reuse OrderCreateView.post logic
+        create_view = OrderCreateView()
+        return create_view.post(request)
+
+
+class OrderDetailView(APIView):
+    """GET /api/orders/{orderId} - Get order detail by ID or order_number"""
+    
+    @require_auth
+    def get(self, request, orderId):
+        """Get order detail"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Try to find order by _id or order_number
+            order = None
+            
+            # Try as ObjectId first
+            try:
+                order_obj_id = ObjectId(orderId)
+                order = Order.objects(id=order_obj_id, user=user).first()
+            except InvalidId:
+                # Try as order_number
+                order = Order.objects(order_number=orderId, user=user).first()
+            
+            if not order:
+                return Response(
+                    {"detail": "Không tìm thấy đơn hàng"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Serialize and return
+            response_data = _serialize_order(order)
+            
+            return Response({"order": response_data}, status=status.HTTP_200_OK)
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class OrderStatusUpdateView(APIView):
+    """PATCH /api/orders/{orderId}/status - Update order status (mainly for cancellation)"""
+    
+    @require_auth
+    def patch(self, request, orderId):
+        """Update order status"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get new status from request
+            new_status = request.data.get('status')
+            if not new_status:
+                return Response(
+                    {"detail": "status là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Currently only support cancellation
+            if new_status != "cancelled":
+                return Response(
+                    {"detail": "Chỉ hỗ trợ hủy đơn hàng (status: cancelled)"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Try to find order by _id or order_number
+            order = None
+            
+            # Try as ObjectId first
+            try:
+                order_obj_id = ObjectId(orderId)
+                order = Order.objects(id=order_obj_id, user=user).first()
+            except InvalidId:
+                # Try as order_number
+                order = Order.objects(order_number=orderId, user=user).first()
+            
+            if not order:
+                return Response(
+                    {"detail": "Không tìm thấy đơn hàng"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Validate status transition
+            # Only allow cancellation from "placed" or "pending"
+            if order.status not in ["placed", "pending"]:
+                if order.status == "cancelled":
+                    return Response(
+                        {"detail": "Đơn hàng đã được hủy trước đó"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                elif order.status in ["shipping", "completed"]:
+                    return Response(
+                        {"detail": "Không thể hủy đơn hàng đã được vận chuyển hoặc đã hoàn thành"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                else:
+                    return Response(
+                        {"detail": "Trạng thái đơn hàng không cho phép hủy"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Map "placed" to "pending" if needed
+            if order.status == "placed":
+                order.status = "pending"
+            
+            # Update status to cancelled
+            order.status = "cancelled"
+            order.save()
+            
+            # Reload to get updated data
+            order.reload()
+            
+            # Serialize and return
+            response_data = _serialize_order(order)
+            
+            return Response(
+                {
+                    "order": response_data,
+                    "message": "Hủy đơn hàng thành công"
+                },
+                status=status.HTTP_200_OK
+            )
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except MEValidationError as e:
+            return Response(
+                {"detail": f"Validation error: {str(e)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
