@@ -5,11 +5,14 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from users.auth import require_admin
-from .models import Order
+from .models import Order, Voucher, UserVoucher
 from users.models import User
+from products.models import ChildCategory
 from bson import ObjectId
+from bson.errors import InvalidId
 from datetime import datetime, timedelta
 from mongoengine.queryset.visitor import Q
+from mongoengine.errors import ValidationError as MEValidationError, NotUniqueError
 
 
 class OrderListView(APIView):
@@ -454,4 +457,418 @@ class CustomerStatusUpdateView(APIView):
             "blocked": user.blocked,
             "message": "Customer status updated"
         })
+
+
+# ==================== VOUCHER ADMIN VIEWS ====================
+
+def _serialize_voucher(voucher, include_categories_details=False):
+    """Serialize voucher to dict"""
+    data = {
+        "_id": str(voucher.id),
+        "name": voucher.name,
+        "code": voucher.code,
+        "description": voucher.description or "",
+        "discount": voucher.discount,
+        "min_value": voucher.min_value,
+        "start_date": voucher.start_date.isoformat() if voucher.start_date else None,
+        "expired_date": voucher.expired_date.isoformat() if voucher.expired_date else None,
+        "categories": [str(cat_id) for cat_id in voucher.categories] if voucher.categories else [],
+        "createdAt": voucher.created_at.isoformat() if voucher.created_at else None,
+        "updatedAt": voucher.updated_at.isoformat() if voucher.updated_at else None
+    }
+    
+    if include_categories_details and voucher.categories:
+        categories_data = []
+        for cat_id in voucher.categories:
+            try:
+                category = ChildCategory.objects(id=cat_id).first()
+                if category:
+                    from products.views import _pick_lang
+                    categories_data.append({
+                        "_id": str(category.id),
+                        "name": _pick_lang(category.name, 'vi'),
+                        "slug": category.slug
+                    })
+            except Exception:
+                pass
+        data["categories"] = categories_data
+    
+    return data
+
+
+def _get_voucher_status(voucher):
+    """Get voucher status: active, expired, upcoming"""
+    now = datetime.utcnow()
+    if voucher.start_date and voucher.start_date > now:
+        return "upcoming"
+    if voucher.expired_date and voucher.expired_date < now:
+        return "expired"
+    return "active"
+
+
+class VoucherListView(APIView):
+    """GET /api/admin/vouchers - List vouchers
+       POST /api/admin/vouchers - Create voucher"""
+    
+    @require_admin
+    def get(self, request):
+        """List vouchers with pagination and filters"""
+        try:
+            page = int(request.query_params.get("page", 1))
+            page_size = int(request.query_params.get("page_size", 20))
+            search = (request.query_params.get("search") or "").strip()
+            status_filter = (request.query_params.get("status") or "").strip().lower()
+            
+            # Build query
+            q = Q()
+            
+            # Search by name or code
+            if search:
+                q = q & (Q(name__icontains=search) | Q(code__icontains=search))
+            
+            # Filter by status
+            vouchers = list(Voucher.objects(q))
+            if status_filter:
+                now = datetime.utcnow()
+                filtered = []
+                for v in vouchers:
+                    status = _get_voucher_status(v)
+                    if status == status_filter:
+                        filtered.append(v)
+                vouchers = filtered
+            
+            # Sort by created_at descending
+            vouchers.sort(key=lambda x: x.created_at or datetime.min, reverse=True)
+            
+            # Pagination
+            total = len(vouchers)
+            start = (page - 1) * page_size
+            end = start + page_size
+            page_vouchers = vouchers[start:end]
+            
+            # Serialize
+            result = [_serialize_voucher(v) for v in page_vouchers]
+            
+            return Response({
+                "data": result,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": (total + page_size - 1) // page_size
+                }
+            })
+            
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @require_admin
+    def post(self, request):
+        """Create new voucher"""
+        try:
+            # Validate required fields
+            name = request.data.get('name')
+            code = request.data.get('code')
+            discount = request.data.get('discount')
+            start_date = request.data.get('start_date')
+            expired_date = request.data.get('expired_date')
+            
+            if not name:
+                return Response(
+                    {"detail": "name là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not code:
+                return Response(
+                    {"detail": "code là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if discount is None:
+                return Response(
+                    {"detail": "discount là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if discount < 0:
+                return Response(
+                    {"detail": "discount phải >= 0"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Normalize code to uppercase
+            code = code.upper().strip()
+            
+            # Check if code already exists
+            existing = Voucher.objects(code=code).first()
+            if existing:
+                return Response(
+                    {"detail": "Code đã tồn tại"},
+                    status=status.HTTP_409_CONFLICT
+                )
+            
+            # Parse dates
+            start_dt = None
+            expired_dt = None
+            
+            if start_date:
+                try:
+                    if isinstance(start_date, str):
+                        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    else:
+                        start_dt = start_date
+                except Exception:
+                    return Response(
+                        {"detail": "start_date không hợp lệ"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            if expired_date:
+                try:
+                    if isinstance(expired_date, str):
+                        expired_dt = datetime.fromisoformat(expired_date.replace('Z', '+00:00'))
+                    else:
+                        expired_dt = expired_date
+                except Exception:
+                    return Response(
+                        {"detail": "expired_date không hợp lệ"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Validate expired_date > start_date
+            if start_dt and expired_dt and expired_dt <= start_dt:
+                return Response(
+                    {"detail": "expired_date phải sau start_date"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Parse categories
+            categories = request.data.get('categories', [])
+            category_ids = []
+            if categories:
+                for cat_id in categories:
+                    try:
+                        obj_id = ObjectId(cat_id)
+                        # Verify category exists
+                        cat = ChildCategory.objects(id=obj_id).first()
+                        if cat:
+                            category_ids.append(obj_id)
+                    except (InvalidId, Exception):
+                        pass
+            
+            # Create voucher
+            voucher = Voucher(
+                name=name,
+                code=code,
+                description=request.data.get('description', ''),
+                discount=float(discount),
+                min_value=float(request.data.get('min_value', 0)),
+                start_date=start_dt,
+                expired_date=expired_dt,
+                categories=category_ids
+            )
+            voucher.save()
+            
+            return Response(
+                _serialize_voucher(voucher),
+                status=status.HTTP_201_CREATED
+            )
+            
+        except MEValidationError as e:
+            return Response(
+                {"detail": f"Validation error: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except NotUniqueError:
+            return Response(
+                {"detail": "Code đã tồn tại"},
+                status=status.HTTP_409_CONFLICT
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class VoucherDetailView(APIView):
+    """GET /api/admin/vouchers/:id - Get voucher detail
+       PUT /api/admin/vouchers/:id - Update voucher
+       DELETE /api/admin/vouchers/:id - Delete voucher"""
+    
+    @require_admin
+    def get(self, request, voucher_id):
+        """Get voucher detail"""
+        try:
+            voucher = Voucher.objects(id=ObjectId(voucher_id)).first()
+            if not voucher:
+                return Response(
+                    {"detail": "Voucher không tồn tại"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            return Response(_serialize_voucher(voucher, include_categories_details=True))
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid voucher ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @require_admin
+    def put(self, request, voucher_id):
+        """Update voucher"""
+        try:
+            voucher = Voucher.objects(id=ObjectId(voucher_id)).first()
+            if not voucher:
+                return Response(
+                    {"detail": "Voucher không tồn tại"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Update fields if provided
+            if 'name' in request.data:
+                voucher.name = request.data['name']
+            
+            if 'code' in request.data:
+                new_code = request.data['code'].upper().strip()
+                # Check if code already exists (excluding current voucher)
+                existing = Voucher.objects(code=new_code, id__ne=voucher.id).first()
+                if existing:
+                    return Response(
+                        {"detail": "Code đã tồn tại"},
+                        status=status.HTTP_409_CONFLICT
+                    )
+                voucher.code = new_code
+            
+            if 'description' in request.data:
+                voucher.description = request.data['description']
+            
+            if 'discount' in request.data:
+                discount = float(request.data['discount'])
+                if discount < 0:
+                    return Response(
+                        {"detail": "discount phải >= 0"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                voucher.discount = discount
+            
+            if 'min_value' in request.data:
+                voucher.min_value = float(request.data['min_value'])
+            
+            if 'start_date' in request.data:
+                start_date = request.data['start_date']
+                if start_date:
+                    try:
+                        if isinstance(start_date, str):
+                            voucher.start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                        else:
+                            voucher.start_date = start_date
+                    except Exception:
+                        return Response(
+                            {"detail": "start_date không hợp lệ"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                else:
+                    voucher.start_date = None
+            
+            if 'expired_date' in request.data:
+                expired_date = request.data['expired_date']
+                if expired_date:
+                    try:
+                        if isinstance(expired_date, str):
+                            voucher.expired_date = datetime.fromisoformat(expired_date.replace('Z', '+00:00'))
+                        else:
+                            voucher.expired_date = expired_date
+                    except Exception:
+                        return Response(
+                            {"detail": "expired_date không hợp lệ"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                else:
+                    voucher.expired_date = None
+            
+            # Validate expired_date > start_date
+            if voucher.start_date and voucher.expired_date and voucher.expired_date <= voucher.start_date:
+                return Response(
+                    {"detail": "expired_date phải sau start_date"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if 'categories' in request.data:
+                categories = request.data['categories']
+                category_ids = []
+                if categories:
+                    for cat_id in categories:
+                        try:
+                            obj_id = ObjectId(cat_id)
+                            cat = ChildCategory.objects(id=obj_id).first()
+                            if cat:
+                                category_ids.append(obj_id)
+                        except (InvalidId, Exception):
+                            pass
+                voucher.categories = category_ids
+            
+            voucher.save()
+            
+            return Response(_serialize_voucher(voucher, include_categories_details=True))
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid voucher ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except NotUniqueError:
+            return Response(
+                {"detail": "Code đã tồn tại"},
+                status=status.HTTP_409_CONFLICT
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @require_admin
+    def delete(self, request, voucher_id):
+        """Delete voucher"""
+        try:
+            voucher = Voucher.objects(id=ObjectId(voucher_id)).first()
+            if not voucher:
+                return Response(
+                    {"detail": "Voucher không tồn tại"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check if voucher is used in any orders
+            orders_using = Order.objects(voucher=voucher).count()
+            if orders_using > 0:
+                return Response(
+                    {"detail": f"Không thể xóa voucher đang được sử dụng trong {orders_using} đơn hàng"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            voucher.delete()
+            
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid voucher ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 

@@ -10,9 +10,10 @@ from mongoengine.errors import ValidationError as MEValidationError
 
 from users.auth import require_auth
 from users.models import User
-from products.models import Product
+from products.models import Product, ChildCategory
 from products.views import _pick_lang
-from .models import Cart, ProductInCart
+from .models import Cart, ProductInCart, Voucher, UserVoucher
+from datetime import datetime
 
 
 def _get_or_create_cart(user):
@@ -560,5 +561,276 @@ class OrderCreateView(APIView):
             {"detail": "Order creation endpoint - Not yet implemented"},
             status=status.HTTP_501_NOT_IMPLEMENTED
         )
+
+
+# ==================== VOUCHER USER VIEWS ====================
+
+def _serialize_user_voucher(user_voucher, include_voucher_details=True):
+    """Serialize user voucher to dict"""
+    data = {
+        "_id": str(user_voucher.id),
+        "addedAt": user_voucher.added_at.isoformat() if user_voucher.added_at else None,
+        "status": user_voucher.status,
+        "usedAt": user_voucher.used_at.isoformat() if user_voucher.used_at else None
+    }
+    
+    if include_voucher_details and user_voucher.voucher:
+        voucher = user_voucher.voucher
+        voucher_data = {
+            "_id": str(voucher.id),
+            "name": voucher.name,
+            "code": voucher.code,
+            "description": voucher.description or "",
+            "discount": voucher.discount,
+            "min_value": voucher.min_value,
+            "start_date": voucher.start_date.isoformat() if voucher.start_date else None,
+            "expired_date": voucher.expired_date.isoformat() if voucher.expired_date else None,
+            "categories": [str(cat_id) for cat_id in voucher.categories] if voucher.categories else []
+        }
+        data["voucher"] = voucher_data
+    
+    return data
+
+
+def _get_voucher_status_for_user(voucher):
+    """Get voucher status for user: active, expired"""
+    now = datetime.utcnow()
+    if voucher.expired_date and voucher.expired_date < now:
+        return "expired"
+    if voucher.start_date and voucher.start_date > now:
+        return "upcoming"
+    return "active"
+
+
+class UserVoucherListView(APIView):
+    """GET /api/vouchers - Get user's vouchers"""
+    
+    @require_auth
+    def get(self, request):
+        """Get list of vouchers user has added"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get status filter
+            status_filter = (request.query_params.get("status") or "").strip().lower()
+            
+            # Get user vouchers
+            user_vouchers = UserVoucher.objects(user=user)
+            
+            # Filter by status if provided
+            # Note: We'll filter after loading since MongoEngine doesn't support nested field queries easily
+            user_vouchers_list = list(user_vouchers)
+            
+            if status_filter:
+                now = datetime.utcnow()
+                filtered = []
+                for uv in user_vouchers_list:
+                    if uv.voucher:
+                        uv.voucher.reload()
+                        if status_filter == "active":
+                            # Active = not expired, not used, and started
+                            if (uv.status == "active" and 
+                                (not uv.voucher.expired_date or uv.voucher.expired_date >= now) and
+                                (not uv.voucher.start_date or uv.voucher.start_date <= now)):
+                                filtered.append(uv)
+                        elif status_filter == "expired":
+                            # Expired = expired_date < now
+                            if uv.voucher.expired_date and uv.voucher.expired_date < now:
+                                filtered.append(uv)
+                        elif status_filter == "used":
+                            if uv.status == "used":
+                                filtered.append(uv)
+                user_vouchers_list = filtered
+            
+            # Sort by added_at descending
+            user_vouchers_list.sort(key=lambda x: x.added_at or datetime.min, reverse=True)
+            
+            # Serialize
+            result = []
+            now = datetime.utcnow()
+            for uv in user_vouchers_list:
+                # Reload voucher reference
+                if uv.voucher:
+                    uv.voucher.reload()
+                    
+                    # Update status if expired
+                    if uv.status == "active" and uv.voucher.expired_date and uv.voucher.expired_date < now:
+                        uv.status = "expired"
+                        uv.save()
+                
+                result.append(_serialize_user_voucher(uv, include_voucher_details=True))
+            
+            return Response({"data": result})
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AddVoucherView(APIView):
+    """POST /api/addVoucher - Add voucher to user's account"""
+    
+    @require_auth
+    def post(self, request):
+        """Add voucher by code"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get code from request
+            code = request.data.get('code')
+            if not code:
+                return Response(
+                    {"detail": "code là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Normalize code
+            code = code.upper().strip()
+            
+            # Find voucher by code
+            voucher = Voucher.objects(code=code).first()
+            if not voucher:
+                return Response(
+                    {"detail": "Mã voucher không hợp lệ"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if voucher is valid (not expired, started)
+            now = datetime.utcnow()
+            if voucher.expired_date and voucher.expired_date < now:
+                return Response(
+                    {"detail": "Voucher đã hết hạn"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if voucher.start_date and voucher.start_date > now:
+                return Response(
+                    {"detail": "Voucher chưa có hiệu lực"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if user already has this voucher
+            existing = UserVoucher.objects(user=user, voucher=voucher).first()
+            if existing:
+                return Response(
+                    {"detail": "Voucher đã được thêm vào tài khoản"},
+                    status=status.HTTP_409_CONFLICT
+                )
+            
+            # Create user voucher
+            user_voucher = UserVoucher(
+                user=user,
+                voucher=voucher,
+                status="active"
+            )
+            user_voucher.save()
+            
+            # Reload voucher reference for serialization
+            user_voucher.voucher.reload()
+            
+            return Response(
+                _serialize_user_voucher(user_voucher, include_voucher_details=True),
+                status=status.HTTP_200_OK
+            )
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class RemoveVoucherView(APIView):
+    """DELETE /api/removeVoucher - Remove voucher from user's account"""
+    
+    @require_auth
+    def delete(self, request):
+        """Remove voucher from user account"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get voucherId from request body
+            voucher_id = request.data.get('voucherId')
+            if not voucher_id:
+                return Response(
+                    {"detail": "voucherId là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Find user voucher
+            try:
+                voucher_obj_id = ObjectId(voucher_id)
+            except InvalidId:
+                return Response(
+                    {"detail": "Invalid voucher ID"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Find voucher first
+            voucher = Voucher.objects(id=voucher_obj_id).first()
+            if not voucher:
+                return Response(
+                    {"detail": "Voucher không tồn tại"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            user_voucher = UserVoucher.objects(user=user, voucher=voucher).first()
+            if not user_voucher:
+                return Response(
+                    {"detail": "Voucher không tồn tại trong danh sách của bạn"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Delete user voucher
+            user_voucher.delete()
+            
+            return Response(
+                {"message": "Xóa mã giảm giá thành công!"},
+                status=status.HTTP_200_OK
+            )
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 

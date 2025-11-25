@@ -148,7 +148,7 @@ class Order(me.Document):
 
 
 class Voucher(me.Document):
-    """Voucher/Coupon model (placeholder - can be expanded later)"""
+    """Voucher/Coupon model"""
     name = me.StringField(required=True)
     code = me.StringField(required=True, unique=True)
     description = me.StringField()
@@ -158,10 +158,44 @@ class Voucher(me.Document):
     expired_date = me.DateTimeField()
     categories = me.ListField(me.ObjectIdField())  # Applicable categories
     
+    # Timestamps
+    created_at = me.DateTimeField(default=datetime.utcnow)
+    updated_at = me.DateTimeField(default=datetime.utcnow)
+    
     meta = {
         "collection": "vouchers",
         "indexes": ["code"]
     }
     
+    def save(self, *args, **kwargs):
+        """Auto-update updated_at timestamp"""
+        self.updated_at = datetime.utcnow()
+        return super(Voucher, self).save(*args, **kwargs)
+    
     def __str__(self):
         return f"{self.code} - {self.name}"
+
+
+class UserVoucher(me.Document):
+    """User-Voucher relationship - Track which vouchers user has added"""
+    user = me.ReferenceField('User', required=True)
+    voucher = me.ReferenceField('Voucher', required=True)
+    added_at = me.DateTimeField(default=datetime.utcnow)
+    used_at = me.DateTimeField()  # Optional, when voucher was used in an order
+    status = me.StringField(
+        choices=["active", "used", "expired"],
+        default="active"
+    )
+    
+    meta = {
+        "collection": "user_vouchers",
+        "indexes": [
+            "user",
+            "voucher",
+            ("user", "voucher"),  # Compound index for uniqueness check
+            "status"
+        ]
+    }
+    
+    def __str__(self):
+        return f"{self.user.email if self.user else 'Unknown'} - {self.voucher.code if self.voucher else 'Unknown'}"

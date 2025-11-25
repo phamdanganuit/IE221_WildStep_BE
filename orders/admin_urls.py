@@ -5,6 +5,7 @@ from django.urls import path
 from .admin_views import (
     OrderListView, OrderDetailView, OrderStatusUpdateView,
     CustomerListView, CustomerDetailView, CustomerStatusUpdateView,
+    VoucherListView, VoucherDetailView,
 )
 from .dashboard_views import DashboardStatsView, AnalyticsView
 
@@ -22,5 +23,9 @@ urlpatterns = [
     path("customers", CustomerListView.as_view(), name="admin_customers"),
     path("customers/<str:customer_id>", CustomerDetailView.as_view(), name="admin_customer_detail"),
     path("customers/<str:customer_id>/status", CustomerStatusUpdateView.as_view(), name="admin_customer_status"),
+    
+    # Vouchers
+    path("vouchers", VoucherListView.as_view(), name="admin_vouchers"),
+    path("vouchers/<str:voucher_id>", VoucherDetailView.as_view(), name="admin_voucher_detail"),
 ]
 

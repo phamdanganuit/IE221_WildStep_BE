@@ -5,7 +5,10 @@ from .views import (
     CartItemDetailView,
     CartCountView,
     VoucherValidateView,
-    OrderCreateView
+    OrderCreateView,
+    UserVoucherListView,
+    AddVoucherView,
+    RemoveVoucherView,
 )
 
 urlpatterns = [
@@ -18,7 +21,10 @@ urlpatterns = [
     path("cart/items/<str:cartItemId>", CartItemDetailView.as_view(), name="cart-item-detail"),  # PUT: update, DELETE: delete one
     
     # Voucher endpoints
+    path("vouchers", UserVoucherListView.as_view(), name="user-vouchers"),  # GET: list user vouchers
     path("vouchers/validate", VoucherValidateView.as_view(), name="voucher-validate"),
+    path("addVoucher", AddVoucherView.as_view(), name="add-voucher"),  # POST: add voucher by code
+    path("removeVoucher", RemoveVoucherView.as_view(), name="remove-voucher"),  # DELETE: remove voucher
     
     # Order endpoints
     path("orders", OrderCreateView.as_view(), name="order-create"),
