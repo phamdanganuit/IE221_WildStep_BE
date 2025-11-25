@@ -9,10 +9,10 @@ from bson.errors import InvalidId
 from mongoengine.errors import ValidationError as MEValidationError
 
 from users.auth import require_auth
-from users.models import User
+from users.models import User, Address
 from products.models import Product, ChildCategory
 from products.views import _pick_lang
-from .models import Cart, ProductInCart, Voucher, UserVoucher
+from .models import Cart, ProductInCart, Voucher, UserVoucher, Order, OrderItem
 from datetime import datetime
 
 
@@ -539,16 +539,310 @@ class CartCountView(APIView):
             )
 
 
+# ==================== HELPER FUNCTIONS FOR VOUCHER ====================
+
+def _calculate_discount_amount(voucher, subtotal):
+    """
+    Tính discount amount từ voucher
+    - Nếu discount < 1: coi như fixed amount (đồng)
+    - Nếu discount >= 1: coi như percentage (%)
+    """
+    if voucher.discount < 1:
+        return voucher.discount  # Fixed amount
+    else:
+        return subtotal * (voucher.discount / 100)  # Percentage
+
+def _check_voucher_categories(voucher, cart_items):
+    """
+    Kiểm tra voucher có áp dụng cho sản phẩm trong cart không
+    - Nếu categories = []: áp dụng cho shipping (luôn hợp lệ)
+    - Nếu categories != []: kiểm tra ít nhất 1 sản phẩm thuộc categories
+    """
+    if not voucher.categories or len(voucher.categories) == 0:
+        return True  # Voucher áp dụng cho shipping
+    
+    # Kiểm tra ít nhất 1 sản phẩm trong cart thuộc categories
+    for item in cart_items:
+        category_id = item.get('category_id')
+        if category_id:
+            try:
+                category_obj_id = ObjectId(category_id)
+                if category_obj_id in voucher.categories:
+                    return True
+            except (InvalidId, Exception):
+                continue
+    
+    return False
+
+
 class VoucherValidateView(APIView):
     """POST /api/vouchers/validate - Validate voucher code"""
     
     @require_auth
     def post(self, request):
-        """Validate voucher code - TODO: Implement voucher validation logic"""
-        return Response(
-            {"detail": "Voucher validation endpoint - Not yet implemented"},
-            status=status.HTTP_501_NOT_IMPLEMENTED
+        """Validate voucher code"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"valid": False, "message": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get request data
+            code = request.data.get('code')
+            subtotal = request.data.get('subtotal')  # Optional
+            cart_items = request.data.get('cart_items', [])  # Optional
+            
+            # Validate code
+            if not code:
+                return Response(
+                    {"valid": False, "message": "Mã voucher là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Normalize code
+            code = code.upper().strip()
+            
+            # Find voucher by code
+            voucher = Voucher.objects(code=code).first()
+            if not voucher:
+                return Response(
+                    {"valid": False, "message": "Mã voucher không hợp lệ"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Find UserVoucher
+            user_voucher = UserVoucher.objects(user=user, voucher=voucher).first()
+            if not user_voucher:
+                return Response(
+                    {"valid": False, "message": "Voucher chưa được thêm vào tài khoản"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check UserVoucher status
+            if user_voucher.status != "active":
+                if user_voucher.status == "used":
+                    return Response(
+                        {"valid": False, "message": "Voucher đã được sử dụng"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                elif user_voucher.status == "expired":
+                    return Response(
+                        {"valid": False, "message": "Voucher đã hết hạn"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Check voucher validity time
+            now = datetime.utcnow()
+            if voucher.expired_date and voucher.expired_date < now:
+                # Update UserVoucher status
+                user_voucher.status = "expired"
+                user_voucher.save()
+                return Response(
+                    {"valid": False, "message": "Voucher đã hết hạn"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if voucher.start_date and voucher.start_date > now:
+                return Response(
+                    {"valid": False, "message": "Voucher chưa có hiệu lực"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check min_value if subtotal provided
+            if subtotal is not None:
+                if voucher.min_value and subtotal < voucher.min_value:
+                    return Response(
+                        {"valid": False, "message": f"Đơn hàng chưa đạt giá trị tối thiểu {int(voucher.min_value):,} VNĐ"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Check categories if cart_items provided
+            if cart_items:
+                if not _check_voucher_categories(voucher, cart_items):
+                    return Response(
+                        {"valid": False, "message": "Voucher không áp dụng cho sản phẩm trong giỏ hàng"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Calculate discount amount
+            discount_amount = 0
+            if subtotal is not None:
+                discount_amount = _calculate_discount_amount(voucher, subtotal)
+            
+            # Determine discount type
+            discount_type = "fixed" if voucher.discount < 1 else "percentage"
+            
+            # Build response
+            response_data = {
+                "valid": True,
+                "voucher": {
+                    "_id": str(voucher.id),
+                    "name": voucher.name,
+                    "code": voucher.code,
+                    "description": voucher.description or "",
+                    "discount": voucher.discount,
+                    "discount_type": discount_type,
+                    "min_value": voucher.min_value,
+                    "start_date": voucher.start_date.isoformat() if voucher.start_date else None,
+                    "expired_date": voucher.expired_date.isoformat() if voucher.expired_date else None,
+                    "categories": [str(cat_id) for cat_id in voucher.categories] if voucher.categories else []
+                },
+                "discount_amount": discount_amount,
+                "message": "Voucher hợp lệ!"
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except InvalidId:
+            return Response(
+                {"valid": False, "message": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"valid": False, "message": f"Đã xảy ra lỗi: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ==================== HELPER FUNCTIONS FOR ORDER ====================
+
+def _calculate_subtotal_from_cart(cart):
+    """
+    Tính subtotal từ cart và validate stock
+    Returns: (subtotal, order_items, errors)
+    """
+    subtotal = 0
+    order_items = []
+    errors = []
+    
+    for cart_item in cart.products:
+        product = Product.objects(id=cart_item.product_id).first()
+        if not product:
+            errors.append("Sản phẩm không tồn tại")
+            continue
+        
+        # Validate stock
+        if cart_item.quantity > product.stock:
+            product_name = _pick_lang(product.name, 'vi') or "Sản phẩm"
+            errors.append(f"Sản phẩm {product_name} chỉ còn {product.stock} sản phẩm")
+            continue
+        
+        # Validate product is active
+        if product.status != "active":
+            product_name = _pick_lang(product.name, 'vi') or "Sản phẩm"
+            errors.append(f"Sản phẩm {product_name} không còn khả dụng")
+            continue
+        
+        # Tính giá
+        price = product.discount_price if product.discount_price else product.original_price
+        total_item = price * cart_item.quantity
+        subtotal += total_item
+        
+        # Tạo OrderItem
+        order_item = OrderItem(
+            product_id=cart_item.product_id,
+            product_name=_pick_lang(product.name, 'vi') or "",
+            product_image=product.images[0] if product.images else None,
+            quantity=cart_item.quantity,
+            price=price,
+            total=total_item,
+            color=cart_item.color,
+            size=cart_item.size
         )
+        order_items.append(order_item)
+    
+    return subtotal, order_items, errors
+
+def _calculate_shipping_fee(address):
+    """
+    Tính phí vận chuyển
+    Mặc định: 30000 VNĐ
+    (Có thể mở rộng tính theo địa chỉ, khoảng cách, ...)
+    """
+    return 30000
+
+def _calculate_vat(subtotal, shipping_fee, discount):
+    """
+    Tính VAT
+    Mặc định: 0
+    (Có thể mở rộng tính theo quy định)
+    """
+    return 0
+
+def _update_product_stock(order_items):
+    """
+    Cập nhật stock và sold cho các sản phẩm trong order
+    """
+    for order_item in order_items:
+        product = Product.objects(id=order_item.product_id).first()
+        if product:
+            product.stock -= order_item.quantity
+            if product.stock < 0:
+                product.stock = 0
+            product.sold += order_item.quantity
+            product.save()
+
+def _serialize_order(order):
+    """Serialize order to dict"""
+    # Reload references
+    if order.address:
+        order.address.reload()
+    if order.voucher:
+        order.voucher.reload()
+    
+    data = {
+        "_id": str(order.id),
+        "order_number": order.order_number,
+        "user": str(order.user.id),
+        "address": {
+            "_id": str(order.address.id),
+            "receiver": order.address.receiver,
+            "phone": order.address.phone,
+            "detail": order.address.detail,
+            "ward": order.address.ward,
+            "district": order.address.district,
+            "province": order.address.province
+        },
+        "items": [
+            {
+                "product_id": str(item.product_id),
+                "product_name": item.product_name,
+                "product_image": item.product_image,
+                "quantity": item.quantity,
+                "price": item.price,
+                "total": item.total,
+                "color": item.color,
+                "size": item.size
+            }
+            for item in order.items
+        ],
+        "pricing": {
+            "subtotal": order.subtotal,
+            "shipping_fee": order.shipping_fee,
+            "discount": order.discount,
+            "vat": order.vat,
+            "total_price": order.total_price
+        },
+        "payment_method": order.payment_method,
+        "payment_status": order.payment_status,
+        "status": order.status,
+        "notes": order.notes,
+        "created_at": order.created_at.isoformat() if order.created_at else None
+    }
+    
+    if order.voucher:
+        data["voucher"] = {
+            "_id": str(order.voucher.id),
+            "code": order.voucher.code,
+            "name": order.voucher.name
+        }
+    
+    return data
 
 
 class OrderCreateView(APIView):
@@ -556,11 +850,223 @@ class OrderCreateView(APIView):
     
     @require_auth
     def post(self, request):
-        """Create new order from cart - TODO: Implement order creation logic"""
-        return Response(
-            {"detail": "Order creation endpoint - Not yet implemented"},
-            status=status.HTTP_501_NOT_IMPLEMENTED
-        )
+        """Create new order from cart"""
+        try:
+            user_id = request.user_claims['sub']
+            user = User.objects(id=ObjectId(user_id)).first()
+            
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get request data
+            address_id = request.data.get('address_id')
+            voucher_id = request.data.get('voucher_id')  # Optional
+            payment_method = request.data.get('payment_method', 'cod')
+            notes = request.data.get('notes', '')
+            
+            # Validate required fields
+            if not address_id:
+                return Response(
+                    {"detail": "address_id là bắt buộc"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate payment_method
+            valid_payment_methods = ["cod", "bank_transfer", "credit_card", "e_wallet"]
+            if payment_method not in valid_payment_methods:
+                return Response(
+                    {"detail": f"Phương thức thanh toán không hợp lệ. Chọn một trong: {', '.join(valid_payment_methods)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get Cart
+            cart = Cart.objects(user=user).first()
+            if not cart or not cart.products:
+                return Response(
+                    {"detail": "Giỏ hàng trống"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate Address
+            try:
+                address_obj_id = ObjectId(address_id)
+            except InvalidId:
+                return Response(
+                    {"detail": "Invalid address ID"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            address = Address.objects(id=address_obj_id, user=user).first()
+            if not address:
+                return Response(
+                    {"detail": "Địa chỉ không tồn tại"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Validate and get Voucher (if provided)
+            voucher = None
+            user_voucher = None
+            if voucher_id:
+                try:
+                    voucher_obj_id = ObjectId(voucher_id)
+                except InvalidId:
+                    return Response(
+                        {"detail": "Invalid voucher ID"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                voucher = Voucher.objects(id=voucher_obj_id).first()
+                if not voucher:
+                    return Response(
+                        {"detail": "Voucher không tồn tại"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                user_voucher = UserVoucher.objects(user=user, voucher=voucher).first()
+                if not user_voucher:
+                    return Response(
+                        {"detail": "Voucher chưa được thêm vào tài khoản"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                if user_voucher.status != "active":
+                    return Response(
+                        {"detail": "Voucher không hợp lệ hoặc đã được sử dụng"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Check voucher validity time
+                now = datetime.utcnow()
+                if voucher.expired_date and voucher.expired_date < now:
+                    user_voucher.status = "expired"
+                    user_voucher.save()
+                    return Response(
+                        {"detail": "Voucher đã hết hạn"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                if voucher.start_date and voucher.start_date > now:
+                    return Response(
+                        {"detail": "Voucher chưa có hiệu lực"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Calculate subtotal and create order items
+            subtotal, order_items, errors = _calculate_subtotal_from_cart(cart)
+            
+            if errors:
+                return Response(
+                    {"detail": errors[0] if len(errors) == 1 else "Có lỗi xảy ra với một số sản phẩm", "errors": errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not order_items:
+                return Response(
+                    {"detail": "Không có sản phẩm hợp lệ trong giỏ hàng"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check voucher min_value and categories
+            if voucher:
+                # Check min_value
+                if voucher.min_value and subtotal < voucher.min_value:
+                    return Response(
+                        {"detail": f"Đơn hàng chưa đạt giá trị tối thiểu {int(voucher.min_value):,} VNĐ"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Check categories
+                if voucher.categories and len(voucher.categories) > 0:
+                    # Build cart_items for category check
+                    cart_items_for_check = []
+                    for cart_item in cart.products:
+                        product = Product.objects(id=cart_item.product_id).first()
+                        if product and product.category:
+                            cart_items_for_check.append({
+                                "category_id": str(product.category.id)
+                            })
+                    
+                    if not _check_voucher_categories(voucher, cart_items_for_check):
+                        return Response(
+                            {"detail": "Voucher không áp dụng cho sản phẩm trong giỏ hàng"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+            
+            # Calculate pricing
+            shipping_fee = _calculate_shipping_fee(address)
+            
+            # Calculate discount
+            discount = 0
+            if voucher:
+                discount = _calculate_discount_amount(voucher, subtotal)
+            
+            # Calculate VAT
+            vat = _calculate_vat(subtotal, shipping_fee, discount)
+            
+            # Calculate total
+            total_price = subtotal + shipping_fee - discount + vat
+            if total_price < 0:
+                total_price = 0
+            
+            # Create Order
+            order = Order(
+                user=user,
+                address=address,
+                items=order_items,
+                subtotal=subtotal,
+                shipping_fee=shipping_fee,
+                discount=discount,
+                vat=vat,
+                total_price=total_price,
+                voucher=voucher if voucher else None,
+                payment_method=payment_method,
+                payment_status="pending",
+                status="pending",
+                notes=notes
+            )
+            
+            # Save order (order_number will be auto-generated)
+            order.save()
+            
+            # Update product stock
+            _update_product_stock(order_items)
+            
+            # Update UserVoucher if voucher was used
+            if user_voucher:
+                user_voucher.status = "used"
+                user_voucher.used_at = datetime.utcnow()
+                user_voucher.save()
+            
+            # Clear cart
+            cart.products = []
+            cart.save()
+            
+            # Reload order to get order_number
+            order.reload()
+            
+            # Serialize and return
+            response_data = _serialize_order(order)
+            
+            return Response(response_data, status=status.HTTP_201_CREATED)
+            
+        except InvalidId:
+            return Response(
+                {"detail": "Invalid user ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except MEValidationError as e:
+            return Response(
+                {"detail": f"Validation error: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Đã xảy ra lỗi khi tạo đơn hàng: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # ==================== VOUCHER USER VIEWS ====================
