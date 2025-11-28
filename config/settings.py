@@ -16,6 +16,7 @@ INSTALLED_APPS = [
     "rest_framework","corsheaders",'users.apps.UsersConfig','orders.apps.OrdersConfig','notifications.apps.NotificationsConfig',
     'products.apps.ProductsConfig',
     "storages",
+    "drf_yasg",
 ]
 
 MIDDLEWARE = [
